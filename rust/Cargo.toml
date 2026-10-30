@@ -1,0 +1,19 @@
+[package]
+name = "vol_light"
+version = "0.1.0"
+edition = "2021"
+description = "Volumetric moving head visualizer (Rust port of the Python prototype)"
+
+[dependencies]
+anyhow = "1"
+bytemuck = "1"
+glam = "0.29"
+glow = "0.16"
+glutin = "0.32"
+glutin-winit = "0.5"
+png = "0.17"
+raw-window-handle = "0.6"
+winit = "0.30"
+
+[profile.dev]
+opt-level = 1
