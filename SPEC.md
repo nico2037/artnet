@@ -294,7 +294,7 @@ DMX liefert nur Ziele; Motor folgt mit begrenzter Geschwindigkeit/Beschleunigung
 
 **Abweichungen:** Dunst-Rauschen mit eigenem PRNG + periodischem separablem Gauß statt numpy-FFT (gleiche Charakteristik, nicht bit-identisch). Render-Targets in physischer Fenstergröße (Retina: mehr Pixel als unter pygame). Fenster frei skalierbar: Render-Targets und Projektion folgen der Fenstergröße.
 
-**Tests** (`cargo test`, 24 + 3): Strahlrichtung neutral, `aim_at`-Roundtrip (hängend/stehend), Prisma-Facetten (Winkel, Gewicht), dunkle Köpfe ohne Strahlen, Kegel/Quader-Winding, Atlas-Layout, Radfahrt vorwärts + Wrap, manuelles Rad ohne Volldrehung; Art-Net: DMX-Puffer ohne Padding, Sequenz (verspätet verworfen, Neustart angenommen), PollReply-Gruppierung (4 Ports pro Sub-Net, Net, leerer Patch), UDP-Empfang + PollReply über Loopback; Universe-Offset (2); MVR: Adressen, Matrix, Z-up → Y-up, Szene mit Gruppen/Symbolen, GDTF-Auflösung, unbekannter Symdef; GDTF: Highlight-Ergänzung (2). Integrationstests `tests/testdata_spike.rs` gegen `testdata/`.
+**Tests** (`cargo test`, 27 + 5): Strahlrichtung neutral, `aim_at`-Roundtrip (hängend/stehend), Prisma-Facetten (Winkel, Gewicht), dunkle Köpfe ohne Strahlen, Kegel/Quader-Winding, Atlas-Layout, Radfahrt vorwärts + Wrap, manuelles Rad ohne Volldrehung; Art-Net: DMX-Puffer ohne Padding, Sequenz (verspätet verworfen, Neustart angenommen), PollReply-Gruppierung (4 Ports pro Sub-Net, Net, leerer Patch), UDP-Empfang + PollReply über Loopback; Universe-Offset (2); MVR: Adressen, Matrix, Z-up → Y-up, Szene mit Gruppen/Symbolen, GDTF-Auflösung, unbekannter Symdef; GDTF: Highlight-Ergänzung (2); Fixture-Typ: CIE → RGB, GDTF-Matrix, Gobo-Dedupe. Integrationstests (5) `tests/testdata_spike.rs` gegen `testdata/`.
 
 **Parität Bild** (Qualität low = ohne Rauschen, 1280×720, Python vs. Rust):
 
@@ -320,7 +320,7 @@ GPU-gebunden → praktisch gleich. Der Rust-Vorteil liegt bei CPU-Arbeit (Art-Ne
 
 ## 13. Geplant: Art-Net-Visualizer mit MVR/GDTF
 
-Status: Art-Net-Empfang (Phase 1), Library-Spike (Phase 0) und MVR-Reader (Phase 3) umgesetzt; GDTF-Auswertung folgt. Ablauf und Phasen in [PLAN.md](PLAN.md).
+Status: Art-Net-Empfang (Phase 1), Library-Spike (Phase 0), GDTF-Auswertung (Phase 2) und MVR-Reader (Phase 3) umgesetzt; DMX → Attribute (Phase 4) folgt. Ablauf und Phasen in [PLAN.md](PLAN.md).
 
 **Ziel:** Der Rust-Port wird zum Visualizer für echte Pulte (ChamSys MagicQ, grandMA, Eigenentwicklung). Rig und Patch kommen aus einer MVR-Datei, das Verhalten jedes Scheinwerfers aus seiner GDTF, die Werte per Art-Net.
 
@@ -386,7 +386,20 @@ Weitere Befunde aus den Testdaten:
 - `GDTFSpec` steht teils ohne `.gdtf`-Endung in der MVR.
 - Absolute Adresse `0` = nicht gepatcht.
 - `FocusPoint` kann Geometrie tragen (Marker); wird nicht gezeichnet.
+- Die GDTFs im Capture-Export sind Platzhalter (eine Geometrie, Dummy-Kanäle `Dimmer1…n`); brauchbare Geräte in den Testdaten: MegaPointe, BeskydBeam, LED-PAR, Pendant.
+- `gdtf` speichert Namen mit Zeichen außerhalb von GDTF-Anhang C als `_` (`[Lamp Dmx]` → `_Lamp Dmx_`); Modus-Suche läuft daher über `Name::new_lossy`.
+- `gdtf` macht Matrizen nicht zugänglich; `fixture_type` liest sie über die Serialisierung (`serde_json`).
 
 ### 13.2 MVR-Reader ([rust/src/io/mvr.rs](rust/src/io/mvr.rs))
 
 `Scene::load(path)` → `fixtures` (UUID, Name, FixtureID/-Numeric, GDTF + Mode, Adressen je Break, Invert Pan/Tilt, Layer, Welt-Matrix), `meshes` (Datei, Objektart, Name, Welt-Matrix) und alle Dateien des Archivs. Layer/GroupObject/ChildList rekursiv, Matrizen kumuliert, `Symbol` → `Symdef` rekursiv (max. 16 Ebenen). Matrix `{u}{v}{w}{o}` = Spalten. Fixture-Matrix: lokal Y-up in m → Welt Y-up in m (`to_world`); Mesh-Matrix: Dateikoordinaten (MVR-Einheit, Z-up) → Welt, Einheitenfaktor (3DS mm, glTF m) setzt der Mesh-Loader.
+
+### 13.3 GDTF-Auswertung ([rust/src/fixture_type.rs](rust/src/fixture_type.rs))
+
+`FixtureType::from_gdtf(file, mode, gobos)` für einen DMX-Modus:
+- **Geometrie-Kette** ab der Wurzel-Geometrie des Modus als flache Liste (Eltern vor Kind) mit lokaler Matrix (GDTF-Achsen, m) und Modell; `rest_transform(part)` = Kette in Grundstellung. `GeometryReference` und Exoten werden nicht aufgeklappt.
+- **Pan/Tilt-Achse** = Geometrie des DMX-Kanals mit Attribut `Pan`/`Tilt` (MegaPointe: Yoke/Head).
+- **Beam**: erste Beam-Geometrie, Art (Spot; PC/Fresnel → Wash; sonst Glow), Beam-/Field-Winkel, Radius, Lichtstrom.
+- **Räder**: Slots mit Farbe (CIE xyY → lineares sRGB, Y = Transmission), Gobo-Bild als Layer in der `GoboLibrary` (Transmission = Alpha × Helligkeit, 256², identische Bilder einmal), Prisma-Facetten (Farbe + 2D-Affin 3×3). Filter-Slots (`Filter=`) vorerst klar.
+- **Modelle**: Datei + Maße (L×B×H); Laden und Skalieren der Meshes folgt mit dem Renderer (Phase 6), ebenso Upload der GoboLibrary als Texture-Array mit Prüfung gegen `GL_MAX_ARRAY_TEXTURE_LAYERS`.
+- Fehlende Rad-Bilder zählen in `missing_media`, der Slot bleibt offen.

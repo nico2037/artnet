@@ -1,6 +1,6 @@
 # Plan: Art-Net-Visualizer mit MVR/GDTF (Rust)
 
-Stand: 2026-10-31 · Status: Phase 0, 1 und 3 umgesetzt; Phase 2 als Nächstes
+Stand: 2026-10-31 · Status: Phase 0–3 umgesetzt; Phase 4 als Nächstes
 
 Der Rust-Port in [rust/](rust/) wird zum echten Visualizer: MVR laden, GDTF auswerten, Art-Net empfangen, DMX → Attribute → Bewegungsmodell → bestehender Volumetrik-Renderer. Standard-Teile über Libraries, eigen nur, wo es nichts gibt. Demo bleibt als `--demo`.
 
@@ -48,7 +48,7 @@ Der Rust-Port in [rust/](rust/) wird zum echten Visualizer: MVR laden, GDTF ausw
 5. Universe-Offset einstellbar (Default: MVR-Universe 1 = Art-Net 0); `dmx::UniverseMap`, CLI/Panel folgen mit MVR-Patch
 6. `examples/artnet_send.rs` als Test-Sender
 
-### Phase 2 – GDTF-Auswertung
+### Phase 2 – GDTF-Auswertung – umgesetzt (SPEC 13.3; Mesh-Laden und Texture-Upload wandern in Phase 6)
 7. Fixture-Typ → Render-Typ: Geometrie-Kette (Pan/Tilt-Achse aus DMX-Kanal-Geometry), Beam-Parameter, Modelle pro Geometrie (auf Model-Maße skaliert), Räder (Gobo-Layer, Farben CIE → RGB, Prismen-Facetten)
 8. Gobo-Import: Alpha × Helligkeit, Dedupe, ein Texture-Array (Layer-Limit prüfen)
 9. Tests mit `testdata/`

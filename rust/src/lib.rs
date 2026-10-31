@@ -2,6 +2,7 @@
 
 pub mod demo;
 pub mod dmx;
+pub mod fixture_type;
 pub mod fixtures;
 mod gl_util;
 pub mod io;

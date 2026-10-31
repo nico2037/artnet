@@ -188,3 +188,74 @@ fn mvr_scene_xml_and_embedded_meshes_load() {
         assert_eq!((ds_ok, glb_ok), (ds, glb));
     }
 }
+
+#[test]
+fn fixture_types_from_mvr_patch() {
+    use vol_light::fixture_type::{FixtureType, GoboLibrary};
+    let mut gobos = GoboLibrary::default();
+    for path in files("mvr") {
+        let scene = mvr::Scene::load(&path).unwrap();
+        let name = path.file_name().unwrap().to_string_lossy();
+        let mut seen = std::collections::BTreeSet::new();
+        for f in &scene.fixtures {
+            if !seen.insert((f.gdtf_spec.clone(), f.gdtf_mode.clone())) {
+                continue;
+            }
+            let mut file = gdtf_io::load(scene.gdtf_bytes(f).unwrap().to_vec()).unwrap();
+            let ft = FixtureType::from_gdtf(&mut file, &f.gdtf_mode, &mut gobos)
+                .unwrap_or_else(|e| panic!("{name}: {} mode {:?}: {e:?}", f.name, f.gdtf_mode));
+            let Some(beam) = ft.beam else {
+                // Capture exports carry placeholder GDTFs: one geometry, dummy channels
+                println!("{name}: {} / {} | placeholder, {} parts, no beam", ft.name, ft.mode, ft.parts.len());
+                continue;
+            };
+            let beam_rest = ft.rest_transform(beam.part);
+            let slots: Vec<usize> = ft.wheels.iter().map(|w| w.slots.len()).collect();
+            let facets: usize = ft.wheels.iter().flat_map(|w| &w.slots).map(|s| s.facets.len()).sum();
+            println!(
+                "{name}: {} / {} | {} parts, pan {:?} tilt {:?} | beam {:?} {:.1}°/{:.1}° r {:.3} m at {:.3} dir {:.2} | wheels {slots:?}, facets {facets}, missing media {}",
+                ft.name,
+                ft.mode,
+                ft.parts.len(),
+                ft.pan.map(|p| &ft.parts[p].name),
+                ft.tilt.map(|p| &ft.parts[p].name),
+                beam.kind,
+                beam.beam_angle,
+                beam.field_angle,
+                beam.radius,
+                beam_rest.w_axis.truncate(),
+                beam_rest.transform_vector3(glam::Vec3::NEG_Z).normalize(),
+                ft.missing_media,
+            );
+            // tilt hangs below pan in every moving head
+            if let (Some(pan), Some(tilt)) = (ft.pan, ft.tilt) {
+                let mut p = ft.parts[tilt].parent;
+                while p.is_some() && p != Some(pan) {
+                    p = ft.parts[p.unwrap()].parent;
+                }
+                assert_eq!(p, Some(pan), "{name}: {} tilt is not below pan", ft.name);
+            }
+        }
+    }
+    println!("gobo library: {} images", gobos.layers.len());
+}
+
+#[test]
+fn loose_gdtfs_build_with_gobo_images() {
+    use vol_light::fixture_type::{FixtureType, GoboLibrary};
+    let mut gobos = GoboLibrary::default();
+    for path in files("gdtf") {
+        let mut file = gdtf_io::load(std::fs::read(&path).unwrap()).unwrap();
+        let mode = file.description.fixture_types[0].dmx_modes[0].name.as_ref().unwrap().to_string();
+        let ft = FixtureType::from_gdtf(&mut file, &mode, &mut gobos).unwrap();
+        let images = ft.wheels.iter().flat_map(|w| &w.slots).filter(|s| s.gobo.is_some()).count();
+        println!("{}: {} / {mode} | pan {:?} tilt {:?} | {images} slots with images", path.display(), ft.name, ft.pan, ft.tilt);
+        assert_eq!(ft.missing_media, 0);
+    }
+    for layer in &gobos.layers {
+        // a gobo has an opening and a blocked part
+        let (min, max) = layer.iter().fold((255u8, 0u8), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+        assert!(min < 32 && max > 200, "flat gobo image {min}..{max}");
+    }
+    println!("gobo library: {} distinct images", gobos.layers.len());
+}

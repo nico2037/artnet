@@ -1921,6 +1921,8 @@ dependencies = [
  "png 0.17.16",
  "raw-window-handle",
  "roxmltree",
+ "serde",
+ "serde_json",
  "socket2",
  "winit",
  "zip",
