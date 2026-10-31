@@ -1,7 +1,5 @@
 //! Deferred renderer: one instanced cone per beam (light volume), so cost scales with beam screen area.
 
-use std::path::Path;
-
 use anyhow::Result;
 use glam::{Mat3, Mat4, Vec3};
 use glow::HasContext;
@@ -124,9 +122,12 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub fn new(gl: glow::Context, size: (i32, i32), quality: Quality, gobo_dir: &Path, scene_vertices: &[f32]) -> Result<Self> {
+    /// `gobos`: GOBO_SIZE² R8 layers. The demo's wheels use the whole library; GDTF fixtures pass
+    /// their wheel's layer range per fixture (`Fixture::gobo_range`).
+    pub fn new(gl: glow::Context, size: (i32, i32), quality: Quality, gobos: &[Vec<u8>], scene_vertices: &[f32]) -> Result<Self> {
         unsafe {
-            let (gobos, gobo_count) = resources::load_gobos(&gl, gobo_dir)?;
+            let gobo_count = gobos.len();
+            let gobos = resources::upload_gobos(&gl, gobos)?;
             let noise = resources::noise_texture(&gl)?;
 
             let prog = |vs: &str, fs: &str, defines: &[&str], common: bool| gu::program(&gl, vs, fs, defines, common);
@@ -178,7 +179,9 @@ impl Renderer {
 
             let light_image_inst = gu::buffer(&gl, &[], glow::DYNAMIC_DRAW)?;
             let light_image_vao = gu::vertex_array(&gl, light_image_prog, &[Layout {
-                buffer: light_image_inst, attrs: &[("i_slot", 1), ("i_wheel1", 3), ("i_wheel2", 3)], instanced: true,
+                buffer: light_image_inst,
+                attrs: &[("i_slot", 1), ("i_wheel1", 3), ("i_wheel2", 3), ("i_range1", 2), ("i_range2", 2)],
+                instanced: true,
             }])?;
             let composite_vao = gu::vertex_array(&gl, composite_prog, &[])?;
 

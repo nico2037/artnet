@@ -64,8 +64,8 @@ pub fn gobo_transmission(png: &[u8]) -> Result<Vec<u8>> {
     Ok(resample(&img, |p| luma(p, ch) * if has_alpha { p[ch - 1] as f32 / 255.0 } else { 1.0 }))
 }
 
-/// All *.png in `dir` (sorted) as one R8 texture array with mipmaps; returns (texture, gobo count).
-pub(crate) unsafe fn load_gobos(gl: &glow::Context, dir: &Path) -> Result<(glow::Texture, usize)> {
+/// All *.png in `dir` (sorted) as GOBO_SIZE² grayscale layers.
+pub fn load_gobo_dir(dir: &Path) -> Result<Vec<Vec<u8>>> {
     let mut files: Vec<_> = std::fs::read_dir(dir)
         .map(|entries| {
             entries
@@ -75,13 +75,16 @@ pub(crate) unsafe fn load_gobos(gl: &glow::Context, dir: &Path) -> Result<(glow:
         })
         .unwrap_or_default();
     files.sort();
-    let mut data = Vec::new();
-    for f in &files {
-        data.extend(load_gray(f).with_context(|| format!("loading gobo {}", f.display()))?);
-    }
-    let layers = files.len().max(1);
-    if files.is_empty() {
-        data = vec![255; GOBO_SIZE * GOBO_SIZE];
+    files.iter().map(|f| load_gray(f).with_context(|| format!("loading gobo {}", f.display()))).collect()
+}
+
+/// Gobo layers as one R8 texture array with mipmaps (a single clear layer when empty).
+pub(crate) unsafe fn upload_gobos(gl: &glow::Context, gobos: &[Vec<u8>]) -> Result<glow::Texture> {
+    let layers = gobos.len().max(1);
+    let data = if gobos.is_empty() { vec![255; GOBO_SIZE * GOBO_SIZE] } else { gobos.concat() };
+    let max_layers = gl.get_parameter_i32(glow::MAX_ARRAY_TEXTURE_LAYERS) as usize;
+    if layers > max_layers {
+        return Err(anyhow!("{layers} gobo layers exceed GL_MAX_ARRAY_TEXTURE_LAYERS ({max_layers})"));
     }
 
     let tex = gl.create_texture().map_err(|e| anyhow!(e))?;
@@ -96,7 +99,7 @@ pub(crate) unsafe fn load_gobos(gl: &glow::Context, dir: &Path) -> Result<(glow:
     gl.tex_parameter_i32(glow::TEXTURE_2D_ARRAY, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
     gl.tex_parameter_i32(glow::TEXTURE_2D_ARRAY, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
     gl.tex_parameter_i32(glow::TEXTURE_2D_ARRAY, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
-    Ok((tex, files.len()))
+    Ok(tex)
 }
 
 /// Tileable smooth 3D noise: random values blurred with a periodic Gaussian (same character as the

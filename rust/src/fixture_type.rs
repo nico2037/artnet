@@ -72,14 +72,16 @@ pub struct Slot {
     /// Linear RGB transmission, 1 = clear.
     pub color: Vec3,
     pub media: Option<String>,
-    /// Layer in the `GoboLibrary`; `None` when the slot has no image or the archive lacks it.
-    pub gobo: Option<u32>,
+    /// Wheel image as transmission (GOBO_SIZE²); `None` when the slot has none or the archive lacks it.
+    pub gobo: Option<Vec<u8>>,
     pub facets: Vec<Facet>,
 }
 
 #[derive(Clone, Debug)]
 pub struct Wheel {
     pub name: String,
+    /// First `GoboLibrary` layer of this wheel (slot n = layer + n − 1); `None` without images.
+    pub layers: Option<u32>,
     /// GDTF slot index n is `slots[n - 1]`.
     pub slots: Vec<Slot>,
 }
@@ -109,7 +111,9 @@ pub struct FixtureType {
     pub missing_media: usize,
 }
 
-/// Wheel images of all fixture types as GOBO_SIZE² R8 layers, identical images stored once.
+/// Wheel images of all fixture types as GOBO_SIZE² R8 layers. Each wheel with images occupies
+/// consecutive layers, one per slot (slots without image are clear), so the light image shader can
+/// scroll across neighbouring slots; identical wheels are stored once.
 #[derive(Default)]
 pub struct GoboLibrary {
     pub layers: Vec<Vec<u8>>,
@@ -117,20 +121,23 @@ pub struct GoboLibrary {
 }
 
 impl GoboLibrary {
-    pub fn add(&mut self, image: Vec<u8>) -> u32 {
-        debug_assert_eq!(image.len(), GOBO_SIZE * GOBO_SIZE);
+    /// Stores a wheel (`None` = clear slot) and returns its first layer.
+    pub fn add_wheel(&mut self, slots: &[Option<Vec<u8>>]) -> u32 {
+        let clear = || vec![255u8; GOBO_SIZE * GOBO_SIZE];
+        let images: Vec<Vec<u8>> = slots.iter().map(|s| s.clone().unwrap_or_else(clear)).collect();
+        debug_assert!(images.iter().all(|i| i.len() == GOBO_SIZE * GOBO_SIZE));
         let mut hasher = DefaultHasher::new();
-        image.hash(&mut hasher);
+        images.hash(&mut hasher);
         let key = hasher.finish();
-        if let Some(&layer) = self.index.get(&key) {
-            if self.layers[layer as usize] == image {
-                return layer;
+        if let Some(&base) = self.index.get(&key) {
+            if self.layers[base as usize..].starts_with(&images) {
+                return base;
             }
         }
-        let layer = self.layers.len() as u32;
-        self.layers.push(image);
-        self.index.insert(key, layer);
-        layer
+        let base = self.layers.len() as u32;
+        self.layers.extend(images);
+        self.index.insert(key, base);
+        base
     }
 }
 
@@ -260,7 +267,7 @@ impl FixtureType {
                         Ok(mut r) => {
                             let mut png = Vec::new();
                             r.read_to_end(&mut png)?;
-                            Some(gobos.add(gobo_transmission(&png)?))
+                            Some(gobo_transmission(&png)?)
                         }
                         Err(_) => {
                             missing_media += 1;
@@ -276,7 +283,9 @@ impl FixtureType {
                     .collect::<Result<_>>()?;
                 slots.push(Slot { name: name_of(slot.name.as_ref()), color, media, gobo, facets });
             }
-            wheels.push(Wheel { name: name_of(wheel.name.as_ref()), slots });
+            let images: Vec<Option<Vec<u8>>> = slots.iter().map(|s: &Slot| s.gobo.clone()).collect();
+            let layers = images.iter().any(Option::is_some).then(|| gobos.add_wheel(&images));
+            wheels.push(Wheel { name: name_of(wheel.name.as_ref()), layers, slots });
         }
 
         Ok(Self {
@@ -377,13 +386,14 @@ mod tests {
     }
 
     #[test]
-    fn gobo_library_dedupes_identical_images() {
+    fn gobo_library_keeps_wheels_contiguous_and_dedupes_them() {
         let mut lib = GoboLibrary::default();
-        let a = vec![1u8; GOBO_SIZE * GOBO_SIZE];
-        let b = vec![2u8; GOBO_SIZE * GOBO_SIZE];
-        assert_eq!(lib.add(a.clone()), 0);
-        assert_eq!(lib.add(b), 1);
-        assert_eq!(lib.add(a), 0);
-        assert_eq!(lib.layers.len(), 2);
+        let a = Some(vec![1u8; GOBO_SIZE * GOBO_SIZE]);
+        let b = Some(vec![2u8; GOBO_SIZE * GOBO_SIZE]);
+        assert_eq!(lib.add_wheel(&[None, a.clone(), b.clone()]), 0);
+        assert_eq!(lib.layers[0][0], 255);
+        assert_eq!(lib.add_wheel(&[a.clone(), b.clone()]), 3);
+        assert_eq!(lib.add_wheel(&[None, a, b]), 0);
+        assert_eq!(lib.layers.len(), 5);
     }
 }

@@ -26,6 +26,19 @@ struct Args {
     /// Send an ArtPoll and print the replies before sending DMX.
     #[arg(long)]
     poll: bool,
+    /// Static values instead of the animation: CHANNEL=VALUE pairs (1-based), e.g. 1=128,6=255.
+    /// The same values go to every universe; all other channels are 0.
+    #[arg(long, value_delimiter = ',', value_parser = parse_set)]
+    set: Vec<(usize, u8)>,
+}
+
+fn parse_set(text: &str) -> Result<(usize, u8), String> {
+    let (ch, v) = text.split_once('=').ok_or("expected CHANNEL=VALUE")?;
+    let ch: usize = ch.trim().parse().map_err(|e| format!("{e}"))?;
+    if !(1..=512).contains(&ch) {
+        return Err("channel must be 1..=512".into());
+    }
+    Ok((ch, v.trim().parse().map_err(|e| format!("{e}"))?))
 }
 
 /// Every channel follows a slow sine with its own phase, so 16-bit pairs and single channels both move visibly.
@@ -36,6 +49,14 @@ fn frame(universe: u16, t: f32) -> Vec<u8> {
             ((0.5 + 0.5 * (t * 0.8 + phase).sin()) * 255.0).round() as u8
         })
         .collect()
+}
+
+fn fixed(set: &[(usize, u8)]) -> Vec<u8> {
+    let mut data = vec![0; 512];
+    for &(ch, v) in set {
+        data[ch - 1] = v;
+    }
+    data
 }
 
 fn poll(socket: &UdpSocket, target: SocketAddr) -> Result<()> {
@@ -80,7 +101,7 @@ fn main() -> Result<()> {
             let output = Output {
                 sequence,
                 port_address: u.try_into().map_err(|e| anyhow!("universe {u}: {e:?}"))?,
-                data: frame(u, t).into(),
+                data: if args.set.is_empty() { frame(u, t) } else { fixed(&args.set) }.into(),
                 ..Output::default()
             };
             let bytes = ArtCommand::Output(output).write_to_buffer().map_err(|e| anyhow!("{e:?}"))?;

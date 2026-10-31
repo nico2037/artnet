@@ -249,15 +249,18 @@ fn loose_gdtfs_build_with_gobo_images() {
         let mode = file.description.fixture_types[0].dmx_modes[0].name.as_ref().unwrap().to_string();
         let ft = FixtureType::from_gdtf(&mut file, &mode, &mut gobos).unwrap();
         let images = ft.wheels.iter().flat_map(|w| &w.slots).filter(|s| s.gobo.is_some()).count();
+        for w in &ft.wheels {
+            assert_eq!(w.layers.is_some(), w.slots.iter().any(|s| s.gobo.is_some()), "{}", w.name);
+        }
         println!("{}: {} / {mode} | pan {:?} tilt {:?} | {images} slots with images", path.display(), ft.name, ft.pan, ft.tilt);
         assert_eq!(ft.missing_media, 0);
     }
     for layer in &gobos.layers {
-        // a gobo has an opening and a blocked part
+        // a gobo has an opening and a blocked part; clear slots are all 255
         let (min, max) = layer.iter().fold((255u8, 0u8), |(lo, hi), &v| (lo.min(v), hi.max(v)));
-        assert!(min < 32 && max > 200, "flat gobo image {min}..{max}");
+        assert!(max > 200 && (min < 32 || min == 255), "flat gobo image {min}..{max}");
     }
-    println!("gobo library: {} distinct images", gobos.layers.len());
+    println!("gobo library: {} layers", gobos.layers.len());
 }
 
 #[test]

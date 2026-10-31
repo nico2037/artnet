@@ -9,14 +9,17 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use glam::Mat4;
+use glam::{vec3, Mat4, Vec3};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::WindowId;
 
-use vol_light::dmx::artnet;
+use vol_light::dmx::{artnet, UniverseMap};
+use vol_light::io::mvr::Scene;
+use vol_light::meshes::{interleave, quad};
+use vol_light::rig::{self, Rig};
 use vol_light::demo::{ManualControl, EYE, FOV, HEIGHT, PAN_SPEED, TARGET, WIDTH};
 use vol_light::fixtures::Fixture;
 use vol_light::renderer::{self, Renderer};
@@ -56,6 +59,12 @@ struct Args {
     /// Art-Net Port-Addresses announced in ArtPollReply until a patch is loaded.
     #[arg(long, value_delimiter = ',', default_value = "0")]
     artnet_universes: Vec<u16>,
+    /// Load this MVR rig instead of the demo; DMX comes from Art-Net (implies --artnet).
+    #[arg(long)]
+    mvr: Option<PathBuf>,
+    /// Art-Net Port-Address of MVR universe 1 is 0 by default; MVR universe U maps to U - FIRST.
+    #[arg(long, default_value_t = 1)]
+    first_mvr_universe: i32,
 }
 
 fn projection((w, h): (i32, i32)) -> Mat4 {
@@ -66,6 +75,8 @@ struct Running {
     win: window::GlWin,
     renderer: Renderer,
     fixtures: Vec<Fixture>,
+    rig: Option<Rig>,
+    eye: Vec3,
     view: Mat4,
     proj: Mat4,
     manual: Option<ManualControl>,
@@ -78,6 +89,26 @@ struct Running {
     tilt_offset: f32,
     artnet: Option<artnet::Receiver>,
     artnet_hint_shown: bool,
+    screenshot_done: bool,
+}
+
+/// Camera framing a rig: in front of (+Z) and above the fixtures' bounding box.
+fn frame_rig(fixtures: &[Fixture]) -> (Vec3, Vec3) {
+    let Some((lo, hi)) = rig::bounds(fixtures) else { return (EYE, TARGET) };
+    let center = (lo + hi) * 0.5;
+    let extent = (hi - lo).max_element().max(4.0);
+    let target = vec3(center.x, hi.y * 0.4, center.z);
+    let eye = vec3(center.x, hi.y * 0.6 + 1.5, hi.z + extent * 0.9 + 4.0);
+    (eye, target)
+}
+
+/// Floor quad under the rig, padded around the fixtures.
+fn floor(fixtures: &[Fixture], out: &mut Vec<f32>) {
+    let (lo, hi) = rig::bounds(fixtures).unwrap_or((Vec3::ZERO, Vec3::ZERO));
+    let pad = 15.0;
+    let (x0, x1, z0, z1) = (lo.x - pad, hi.x + pad, lo.z - pad, hi.z + pad);
+    let y = lo.y.min(0.0);
+    interleave(&quad([vec3(x0, y, z0), vec3(x1, y, z0), vec3(x1, y, z1), vec3(x0, y, z1)], Vec3::Y), 0.3, out);
 }
 
 /// Art-Net is idle this long before the console gets a hint about unicast to 127.0.0.1.
@@ -94,13 +125,44 @@ impl App {
         let (win, gl) = window::create(event_loop, (WIDTH, HEIGHT), "Movinghead Demo")?;
         let size = win.window.inner_size();
         let size = (size.width as i32, size.height as i32);
-        let (mut fixtures, rows) = demo::create_rig(self.args.fixtures);
         let quality = renderer::quality(&self.args.quality).unwrap();
-        let mut renderer = Renderer::new(gl, size, quality, &self.args.gobo_dir, &demo::build_stage(&rows))?;
-        let view = Mat4::look_at_rh(EYE, TARGET, glam::Vec3::Y);
+        let map = UniverseMap { first_mvr_universe: self.args.first_mvr_universe };
+        let (mut fixtures, mut renderer, rig, eye, target, universes) = if let Some(path) = &self.args.mvr {
+            let scene = Scene::load(path).with_context(|| format!("loading {}", path.display()))?;
+            let rig = Rig::from_scene(&scene);
+            for s in &rig.skipped {
+                eprintln!("MVR: skipped {s}");
+            }
+            for n in &rig.notes {
+                eprintln!("MVR: {n}");
+            }
+            let fixtures = rig.render_fixtures();
+            let (mut stage, failed) = rig::scene_vertices(&scene);
+            for f in failed {
+                eprintln!("MVR: scene mesh {f}");
+            }
+            floor(&fixtures, &mut stage);
+            println!(
+                "MVR: {} fixtures ({} types), {} scene meshes, {} gobo layers",
+                rig.fixtures.len(),
+                rig.kinds.len(),
+                scene.meshes.len(),
+                rig.gobos.layers.len()
+            );
+            let renderer = Renderer::new(gl, size, quality, &rig.gobos.layers, &stage)?;
+            let (eye, target) = frame_rig(&fixtures);
+            let universes: Vec<u16> = rig.universes().iter().filter_map(|&u| map.to_artnet(u as i32)).collect();
+            (fixtures, renderer, Some(rig), eye, target, universes)
+        } else {
+            let (fixtures, rows) = demo::create_rig(self.args.fixtures);
+            let gobos = resources::load_gobo_dir(&self.args.gobo_dir)?;
+            let renderer = Renderer::new(gl, size, quality, &gobos, &demo::build_stage(&rows))?;
+            (fixtures, renderer, None, EYE, TARGET, self.args.artnet_universes.clone())
+        };
+        let view = Mat4::look_at_rh(eye, target, Vec3::Y);
         let proj = projection(size);
 
-        if let Some(path) = &self.args.screenshot {
+        if let (Some(path), None) = (&self.args.screenshot, &rig) {
             demo::animate(&mut fixtures, self.args.time, renderer.gobo_count);
             renderer.render(&fixtures, EYE, view, proj, self.args.time)?;
             resources::save_png(path, (size.0 as u32, size.1 as u32), &renderer.read_screen())
@@ -108,7 +170,7 @@ impl App {
             event_loop.exit();
             return Ok(());
         }
-        if let Some(frames) = self.args.bench {
+        if let (Some(frames), None) = (self.args.bench, &rig) {
             // same protocol as the Python measurements: 30 warm-up frames, then t advances 1/60 s per frame
             let mut t0 = Instant::now();
             for i in 0..30 + frames {
@@ -132,13 +194,18 @@ impl App {
         if manual.is_some() {
             println!("{}", demo::MANUAL_HELP);
         }
-        let artnet = if self.args.artnet {
+        let artnet = if self.args.artnet || rig.is_some() {
             let receiver = artnet::Receiver::start(artnet::Config {
                 interface: self.args.artnet_ip,
-                universes: self.args.artnet_universes.clone(),
+                universes,
                 ..artnet::Config::default()
             })?;
             println!("Art-Net: listening on {}", receiver.local_addr);
+            if rig.is_some() {
+                let st = receiver.state();
+                let ports: Vec<String> = st.announced.iter().map(|p| p.to_string()).collect();
+                println!("Art-Net: patch uses Port-Addresses {}", ports.join(", "));
+            }
             Some(receiver)
         } else {
             None
@@ -148,6 +215,8 @@ impl App {
             win,
             renderer,
             fixtures,
+            rig,
+            eye,
             view,
             proj,
             manual,
@@ -160,6 +229,7 @@ impl App {
             tilt_offset: 0.0,
             artnet,
             artnet_hint_shown: false,
+            screenshot_done: false,
         });
         Ok(())
     }
@@ -180,17 +250,36 @@ impl App {
         r.tilt_offset += PAN_SPEED * dt * tilt_axis;
 
         let t = (now - r.start).as_secs_f32();
-        if let Some(manual) = r.manual.as_mut() {
-            manual.update(&r.keys, dt);
-            manual.apply(&mut r.fixtures);
+        if let Some(rig) = r.rig.as_mut() {
+            let map = UniverseMap { first_mvr_universe: args.first_mvr_universe };
+            match r.artnet.as_ref() {
+                Some(a) => {
+                    let st = a.state();
+                    rig.update(|u| map.to_artnet(u as i32).and_then(|p| st.dmx(p)), dt);
+                }
+                None => rig.update(|_| None, dt),
+            }
+            r.fixtures = rig.render_fixtures();
         } else {
-            demo::animate(&mut r.fixtures, t, r.renderer.gobo_count);
+            if let Some(manual) = r.manual.as_mut() {
+                manual.update(&r.keys, dt);
+                manual.apply(&mut r.fixtures);
+            } else {
+                demo::animate(&mut r.fixtures, t, r.renderer.gobo_count);
+            }
+            for f in &mut r.fixtures {
+                f.pan += r.pan_offset;
+                f.tilt += r.tilt_offset;
+            }
         }
-        for f in &mut r.fixtures {
-            f.pan += r.pan_offset;
-            f.tilt += r.tilt_offset;
+        let beams = r.renderer.render(&r.fixtures, r.eye, r.view, r.proj, t)?;
+        if let (Some(path), true) = (&args.screenshot, r.rig.is_some() && t >= args.time) {
+            // MVR mode: DMX arrives over the network, so the shot is taken live after --time seconds
+            let size = r.win.window.inner_size();
+            resources::save_png(path, (size.width, size.height), &r.renderer.read_screen())
+                .with_context(|| format!("saving {}", path.display()))?;
+            r.screenshot_done = true;
         }
-        let beams = r.renderer.render(&r.fixtures, EYE, r.view, r.proj, t)?;
         r.win.swap()?;
 
         r.frames += 1;
@@ -278,6 +367,8 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 if let Err(e) = self.frame() {
                     self.fail(event_loop, e);
+                } else if self.running.as_ref().is_some_and(|r| r.screenshot_done) {
+                    event_loop.exit();
                 }
             }
             _ => {}
