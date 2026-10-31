@@ -1,5 +1,6 @@
 //! Volumetric moving head visualizer: renderer, demo rig, Art-Net input.
 
+pub mod camera;
 pub mod demo;
 pub mod dmx;
 pub mod fixture_type;
@@ -11,4 +12,5 @@ pub mod renderer;
 pub mod resources;
 pub mod rig;
 pub mod sim;
+pub mod ui;
 pub mod window;

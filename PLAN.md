@@ -1,6 +1,6 @@
 # Plan: Art-Net-Visualizer mit MVR/GDTF (Rust)
 
-Stand: 2026-10-31 · Status: Phase 0–5 umgesetzt, Phase 6 erster Schnitt (`--mvr`); Phase 7 als Nächstes
+Stand: 2026-10-31 · Status: Phase 0–5 und 7 umgesetzt, Phase 6 erster Schnitt; Phase 8 (Pult-Abgleich) und Rest von 6 offen
 
 Der Rust-Port in [rust/](rust/) wird zum echten Visualizer: MVR laden, GDTF auswerten, Art-Net empfangen, DMX → Attribute → Bewegungsmodell → bestehender Volumetrik-Renderer. Standard-Teile über Libraries, eigen nur, wo es nichts gibt. Demo bleibt als `--demo`.
 
@@ -74,7 +74,7 @@ Der Rust-Port in [rust/](rust/) wird zum echten Visualizer: MVR laden, GDTF ausw
 21. Fixture-Meshes pro (Typ, Geometrie) instanziert, Linse emissiv
 22. Statische MVR-Szene + optionaler Boden + Schatten
 
-### Phase 7 – App und Bedienung *(braucht 1, 6)*
+### Phase 7 – App und Bedienung *(braucht 1, 6)* – umgesetzt (SPEC 13.7; offen aus 24: Render-Einstellungen außer Ziel-FPS, Interface-Wahl zur Laufzeit)
 23. Kamera (eigen, ~100 Zeilen): Orbit (linke Maus), Verschieben (mittlere Maus / Shift), Zoom (Mausrad); beim MVR-Laden automatisch aufs Rig einpassen; Ansichten per Taste (FOH, oben, links, rechts); Eingaben über dem Panel gehen an egui
 24. egui-Panel: Art-Net-Status (Universen, Pakete/s, Quellen), Patch-Liste (FID, Name, Typ, Mode, U.A), DMX-Monitor + dekodierte Attribute, Render-Einstellungen (Qualität, Haze, Belichtung, Boden, Schatten), Universe-Offset, Interface
 25. MVR laden per `--mvr` und Drag & Drop, Neu-Laden; `--demo` bleibt

@@ -1,5 +1,7 @@
 //! Deferred renderer: one instanced cone per beam (light volume), so cost scales with beam screen area.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use glam::{Mat3, Mat4, Vec3};
 use glow::HasContext;
@@ -73,7 +75,7 @@ struct Atlas {
 }
 
 pub struct Renderer {
-    pub gl: glow::Context,
+    pub gl: Arc<glow::Context>,
     pub size: (i32, i32),
     pub quality: Quality,
     pub volume_scale: f32,
@@ -90,6 +92,7 @@ pub struct Renderer {
     light_image_prog: glow::Program,
 
     scene_vao: glow::VertexArray,
+    scene_vbo: glow::Buffer,
     scene_vertices: i32,
     shadow_vao: glow::VertexArray,
     body_vao: glow::VertexArray,
@@ -124,7 +127,7 @@ pub struct Renderer {
 impl Renderer {
     /// `gobos`: GOBO_SIZE² R8 layers. The demo's wheels use the whole library; GDTF fixtures pass
     /// their wheel's layer range per fixture (`Fixture::gobo_range`).
-    pub fn new(gl: glow::Context, size: (i32, i32), quality: Quality, gobos: &[Vec<u8>], scene_vertices: &[f32]) -> Result<Self> {
+    pub fn new(gl: Arc<glow::Context>, size: (i32, i32), quality: Quality, gobos: &[Vec<u8>], scene_vertices: &[f32]) -> Result<Self> {
         unsafe {
             let gobo_count = gobos.len();
             let gobos = resources::upload_gobos(&gl, gobos)?;
@@ -211,6 +214,7 @@ impl Renderer {
                 shadow_prog,
                 light_image_prog,
                 scene_vao,
+                scene_vbo,
                 scene_vertices: (scene_vertices.len() / 9) as i32,
                 shadow_vao,
                 body_vao,
@@ -242,6 +246,20 @@ impl Renderer {
                 gl,
             })
         }
+    }
+
+    /// Replaces the gobo library and the static scene, e.g. after loading another MVR.
+    pub fn set_scene(&mut self, gobos: &[Vec<u8>], scene_vertices: &[f32]) -> Result<()> {
+        unsafe {
+            let texture = resources::upload_gobos(&self.gl, gobos)?;
+            self.gl.delete_texture(std::mem::replace(&mut self.gobos, texture));
+            self.gobo_count = gobos.len();
+            gu::upload(&self.gl, self.scene_vbo, scene_vertices);
+            self.scene_vertices = (scene_vertices.len() / 9) as i32;
+            // shadow maps contain the old scene
+            self.shadow_key.clear();
+        }
+        Ok(())
     }
 
     /// Follows the window size; expects both dimensions to be positive.
