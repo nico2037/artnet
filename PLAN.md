@@ -1,6 +1,6 @@
 # Plan: Art-Net-Visualizer mit MVR/GDTF (Rust)
 
-Stand: 2026-10-31 · Status: Phase 0 Schritt 1 und Phase 1 umgesetzt; Spike (Schritt 2) wartet auf `testdata/`
+Stand: 2026-10-31 · Status: Phase 0, 1 und 3 umgesetzt; Phase 2 als Nächstes
 
 Der Rust-Port in [rust/](rust/) wird zum echten Visualizer: MVR laden, GDTF auswerten, Art-Net empfangen, DMX → Attribute → Bewegungsmodell → bestehender Volumetrik-Renderer. Standard-Teile über Libraries, eigen nur, wo es nichts gibt. Demo bleibt als `--demo`.
 
@@ -40,7 +40,7 @@ Der Rust-Port in [rust/](rust/) wird zum echten Visualizer: MVR laden, GDTF ausw
 
 ### Phase 0 – Grundlage und Library-Test
 1. Rust ≥ 1.85, Abhängigkeiten anlegen *(erledigt: Pin entfernt, `clap` für die CLI, Art-Net-Crates; `dmx/` angelegt, übrige Module entstehen mit ihrer Phase)*; Module `app/`, `render/`, `io/{mvr, models}`, `dmx/{artnet, resolve}`, `sim/{motion, state}`, `demo.rs`
-2. Spike gegen `testdata/`: `gdtf` parst alle GDTFs, `ds3`/`gltf` laden alle Modelle, `zeevonk` an 1–2 Fixtures → Entscheidung `zeevonk` vs. eigener Resolver; Ergebnis in [SPEC.md](SPEC.md)
+2. *(erledigt, Ergebnis in SPEC 13.1: `gdtf` mit Highlight-Ergänzung, eigener Resolver statt `zeevonk`)* Spike gegen `testdata/`: `gdtf` parst alle GDTFs, `ds3`/`gltf` laden alle Modelle, `zeevonk` an 1–2 Fixtures → Entscheidung `zeevonk` vs. eigener Resolver; Ergebnis in [SPEC.md](SPEC.md)
 
 ### Phase 1 – Art-Net *(parallel zu 2 und 3)* – umgesetzt
 3. Empfangs-Thread: UDP 6454 via `socket2` (Reuse, Broadcast, Interface wählbar), Parsing mit `artnet_protocol`, Universe-Puffer + Statistik
@@ -53,7 +53,7 @@ Der Rust-Port in [rust/](rust/) wird zum echten Visualizer: MVR laden, GDTF ausw
 8. Gobo-Import: Alpha × Helligkeit, Dedupe, ein Texture-Array (Layer-Limit prüfen)
 9. Tests mit `testdata/`
 
-### Phase 3 – MVR *(eigen)*
+### Phase 3 – MVR *(eigen)* – umgesetzt (SPEC 13.2)
 10. `io/mvr.rs`: Layer/Gruppen rekursiv, Matrizen kumulieren; Fixtures (UUID, Name, FID, GDTF + Mode, Adressen/Breaks, Invert); Szene-Objekte → Meshes
 11. Koordinaten Z-up → Y-up `(x, z, −y)`, mm → m
 12. Tests: Matrix-Parsing, Adressformate, Beispiel-MVR
@@ -94,4 +94,4 @@ sACN, MVR-xchange, LED-Multicell, Animationsrad, Shaper/Blades, Video/Media-Serv
 
 - Unicast an `127.0.0.1` erreicht nur ein Programm → im Pult Broadcast empfehlen; Panel zeigt Hinweis, wenn keine Pakete ankommen.
 - Python-Version ab Phase 6 einfrieren (gemeinsame Shader werden erweitert).
-- Vor dem Start nötig: Testdateien in `testdata/`, `rustup default stable`.
+- Testdaten: `testdata/` (MIT, im Repo) und `testdata/external/` (per `python tools/fetch_testdata.py`, nicht im Repo), Details in [testdata/README.md](testdata/README.md).

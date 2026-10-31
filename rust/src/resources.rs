@@ -36,7 +36,7 @@ fn load_gray(path: &Path) -> Result<Vec<u8>> {
 }
 
 /// All *.png in `dir` (sorted) as one R8 texture array with mipmaps; returns (texture, gobo count).
-pub unsafe fn load_gobos(gl: &glow::Context, dir: &Path) -> Result<(glow::Texture, usize)> {
+pub(crate) unsafe fn load_gobos(gl: &glow::Context, dir: &Path) -> Result<(glow::Texture, usize)> {
     let mut files: Vec<_> = std::fs::read_dir(dir)
         .map(|entries| {
             entries
@@ -72,7 +72,7 @@ pub unsafe fn load_gobos(gl: &glow::Context, dir: &Path) -> Result<(glow::Textur
 
 /// Tileable smooth 3D noise: random values blurred with a periodic Gaussian (same character as the
 /// Python version, not bit-identical).
-pub unsafe fn noise_texture(gl: &glow::Context) -> Result<glow::Texture> {
+pub(crate) unsafe fn noise_texture(gl: &glow::Context) -> Result<glow::Texture> {
     const N: usize = 32;
     const SIGMA: f32 = 1.2;
     let mut state: u64 = 0x9E37_79B9_7F4A_7C15;

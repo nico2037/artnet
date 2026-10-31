@@ -1,15 +1,5 @@
 //! Volumetric moving head demo: automatic timeline, or --manual for direct keyboard control.
 
-mod demo;
-// patch-driven parts (universe map, set_universes, dmx lookup) get their callers with MVR and the DMX resolver
-#[allow(dead_code)]
-mod dmx;
-mod fixtures;
-mod gl_util;
-mod meshes;
-mod renderer;
-mod resources;
-mod window;
 
 use std::collections::HashSet;
 use std::net::Ipv4Addr;
@@ -26,10 +16,11 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::WindowId;
 
-use dmx::artnet;
-use demo::{ManualControl, EYE, FOV, HEIGHT, PAN_SPEED, TARGET, WIDTH};
-use fixtures::Fixture;
-use renderer::Renderer;
+use vol_light::dmx::artnet;
+use vol_light::demo::{ManualControl, EYE, FOV, HEIGHT, PAN_SPEED, TARGET, WIDTH};
+use vol_light::fixtures::Fixture;
+use vol_light::renderer::{self, Renderer};
+use vol_light::{demo, resources, window};
 
 /// Volumetric moving head visualizer: demo timeline, manual control, Art-Net input.
 #[derive(Parser)]

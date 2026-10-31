@@ -294,7 +294,7 @@ DMX liefert nur Ziele; Motor folgt mit begrenzter Geschwindigkeit/Beschleunigung
 
 **Abweichungen:** Dunst-Rauschen mit eigenem PRNG + periodischem separablem Gauß statt numpy-FFT (gleiche Charakteristik, nicht bit-identisch). Render-Targets in physischer Fenstergröße (Retina: mehr Pixel als unter pygame). Fenster frei skalierbar: Render-Targets und Projektion folgen der Fenstergröße.
 
-**Tests** (`cargo test`, 16): Strahlrichtung neutral, `aim_at`-Roundtrip (hängend/stehend), Prisma-Facetten (Winkel, Gewicht), dunkle Köpfe ohne Strahlen, Kegel/Quader-Winding, Atlas-Layout, Radfahrt vorwärts + Wrap, manuelles Rad ohne Volldrehung; Art-Net: DMX-Puffer ohne Padding, Sequenz (verspätet verworfen, Neustart angenommen), PollReply-Gruppierung (4 Ports pro Sub-Net, Net, leerer Patch), UDP-Empfang + PollReply über Loopback; Universe-Offset (2).
+**Tests** (`cargo test`, 24 + 3): Strahlrichtung neutral, `aim_at`-Roundtrip (hängend/stehend), Prisma-Facetten (Winkel, Gewicht), dunkle Köpfe ohne Strahlen, Kegel/Quader-Winding, Atlas-Layout, Radfahrt vorwärts + Wrap, manuelles Rad ohne Volldrehung; Art-Net: DMX-Puffer ohne Padding, Sequenz (verspätet verworfen, Neustart angenommen), PollReply-Gruppierung (4 Ports pro Sub-Net, Net, leerer Patch), UDP-Empfang + PollReply über Loopback; Universe-Offset (2); MVR: Adressen, Matrix, Z-up → Y-up, Szene mit Gruppen/Symbolen, GDTF-Auflösung, unbekannter Symdef; GDTF: Highlight-Ergänzung (2). Integrationstests `tests/testdata_spike.rs` gegen `testdata/`.
 
 **Parität Bild** (Qualität low = ohne Rauschen, 1280×720, Python vs. Rust):
 
@@ -320,7 +320,7 @@ GPU-gebunden → praktisch gleich. Der Rust-Vorteil liegt bei CPU-Arbeit (Art-Ne
 
 ## 13. Geplant: Art-Net-Visualizer mit MVR/GDTF
 
-Status: geplant, nicht umgesetzt. Ablauf und Phasen in [PLAN.md](PLAN.md).
+Status: Art-Net-Empfang (Phase 1), Library-Spike (Phase 0) und MVR-Reader (Phase 3) umgesetzt; GDTF-Auswertung folgt. Ablauf und Phasen in [PLAN.md](PLAN.md).
 
 **Ziel:** Der Rust-Port wird zum Visualizer für echte Pulte (ChamSys MagicQ, grandMA, Eigenentwicklung). Rig und Patch kommen aus einer MVR-Datei, das Verhalten jedes Scheinwerfers aus seiner GDTF, die Werte per Art-Net.
 
@@ -346,8 +346,8 @@ flowchart LR
 | Teil | Lösung |
 |---|---|
 | Art-Net-Pakete | `artnet_protocol` + `socket2` (Port 6454 teilen, Broadcast) |
-| GDTF lesen | `gdtf` (Objektmodell + Ressourcen) |
-| DMX → Attribut | `zeevonk` nach Test, sonst eigener Resolver |
+| GDTF lesen | `gdtf` (Objektmodell + Ressourcen), über `io::gdtf::load` (ergänzt fehlendes `Highlight`) |
+| DMX → Attribut | eigener Resolver (`zeevonk` verworfen, siehe Spike) |
 | MVR | eigener Parser auf `zip` + `roxmltree` |
 | 3D-Modelle | `ds3` (3DS), `gltf` (GLB) |
 | UI | `egui` + `egui-winit` + `egui_glow` |
@@ -367,4 +367,26 @@ flowchart LR
 
 **Nicht geplant:** sACN, MVR-xchange, LED-Multicell, Animationsrad, Shaper, Video/Media-Server, Laser, Rig-Editor, mehrere Beams pro Fixture.
 
-**Voraussetzungen:** Testdateien in `testdata/`, aktuelles Rust (`rustup default stable`, ≥ 1.85).
+**Voraussetzungen:** Testdateien in `testdata/` (siehe [testdata/README.md](testdata/README.md)), aktuelles Rust (`rustup default stable`, ≥ 1.85).
+
+### 13.1 Library-Spike (Phase 0)
+
+`cargo test --test testdata_spike -- --nocapture` gegen `testdata/` (+ `testdata/external/` nach `python tools/fetch_testdata.py`):
+
+| Library | Ergebnis | Entscheidung |
+|---|---|---|
+| `gdtf` 0.3 | lehnt 5 von 8 echten GDTFs ab (Clay Paky, Robe, ADB aus Capture): Pflichtfeld `DMXChannel/@Highlight`, laut Spec optional. Mit ergänztem `Highlight="None"` lesen alle; Modi, ChannelFunctions, Räder, Prisma-Facetten (MegaPointe: 7 Räder, 61 Facetten), Modelle vollständig | nutzen, Loader repackt `description.xml` im Speicher |
+| `zeevonk` 0.3 | löst Attribute → DMX auf (Pult-Richtung), nicht DMX → Attribute; zieht `libftd2xx` (FTDI-Treiber) und `gdtf` 0.2 | verworfen, eigener Resolver |
+| `ds3` 0.1 | alle 3DS-Dateien (899 in MVR-Szenen, dazu die GDTF-Modelle) | nutzen |
+| `gltf` 1.4 | 100/100 GLB-Dateien | nutzen |
+| `zip` 8 + `roxmltree` | MVR mit 2 267 Mesh-Instanzen, 76 Fixtures in < 0,1 s | nutzen |
+
+Weitere Befunde aus den Testdaten:
+- Capture-Exporte enthalten GDTFs ohne Räder und Modelle; MVR-Beispiele ohne Rad-Bilder → Renderer braucht Fallbacks (Slot ohne Bild = offen bzw. Farbe, Gerät ohne Modell = Standard-Körper).
+- `GDTFSpec` steht teils ohne `.gdtf`-Endung in der MVR.
+- Absolute Adresse `0` = nicht gepatcht.
+- `FocusPoint` kann Geometrie tragen (Marker); wird nicht gezeichnet.
+
+### 13.2 MVR-Reader ([rust/src/io/mvr.rs](rust/src/io/mvr.rs))
+
+`Scene::load(path)` → `fixtures` (UUID, Name, FixtureID/-Numeric, GDTF + Mode, Adressen je Break, Invert Pan/Tilt, Layer, Welt-Matrix), `meshes` (Datei, Objektart, Name, Welt-Matrix) und alle Dateien des Archivs. Layer/GroupObject/ChildList rekursiv, Matrizen kumuliert, `Symbol` → `Symdef` rekursiv (max. 16 Ebenen). Matrix `{u}{v}{w}{o}` = Spalten. Fixture-Matrix: lokal Y-up in m → Welt Y-up in m (`to_world`); Mesh-Matrix: Dateikoordinaten (MVR-Einheit, Z-up) → Welt, Einheitenfaktor (3DS mm, glTF m) setzt der Mesh-Loader.
