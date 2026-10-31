@@ -9,7 +9,7 @@ pub const LENS_OFFSET: f32 = 0.14;
 pub const BEAM_LENGTH: f32 = 40.0;
 pub const BEAM_FLOATS: usize = 22; // apex 3, basis 9, cone 3 (tan half angle, length, focus), color 3, shadow origin 3 + slot 1
 pub const BODY_FLOATS: usize = 33; // pos 3, mount 9, pan 9, beam 9, lens color 3
-pub const LIGHT_FLOATS: usize = 11; // slot 1, wheel 1 (pos, rot, blur) 3, wheel 2 3, layer range 1 2, range 2 2
+pub const LIGHT_FLOATS: usize = 12; // slot 1, wheel 1 (pos, rot, blur) 3, wheel 2 3, layer range 1 2, range 2 2, iris 1
 pub const WHEEL_PLANES: [f32; 2] = [0.0, 0.3]; // focus value at which each gobo wheel is sharp
 pub const FOCUS_BLUR: f32 = 8.0; // mip levels of blur per unit of defocus
 
@@ -44,6 +44,8 @@ pub struct Fixture {
     /// None = demo wheel over the whole gobo library.
     pub gobo_range: Option<(u32, u32)>,
     pub gobo2_range: Option<(u32, u32)>,
+    /// Closed fraction of the iris (0 = open). The cone angle shrinks with it; the light image is cropped.
+    pub iris: f32,
     pub pose: Option<Pose>,
 }
 
@@ -67,6 +69,7 @@ impl Default for Fixture {
             prism_spread: 7.0,
             gobo_range: None,
             gobo2_range: None,
+            iris: 0.0,
             pose: None,
         }
     }
@@ -116,6 +119,7 @@ pub fn build_light_instances(fixtures: &[Fixture]) -> Vec<f32> {
         ]);
         out.extend(range(f.gobo_range));
         out.extend(range(f.gobo2_range));
+        out.push(f.iris);
     }
     out
 }

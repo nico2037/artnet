@@ -437,7 +437,8 @@ MegaPointe (RealFade 3,134 s, RealAcceleration 0,549 s): 270° Pan in 2,08 s, er
 - **GDTF ohne Beam-Geometrie** (z. B. Platzhalter aus Visualisierern) mit Dimmer bekommen einen 25°-Spot am Wurzelteil. Die Capture-Platzhalter in `testdata/capture_demo_show.mvr` haben nur `Dimmer1…n`-Kanäle und eine Geometrie; sie bleiben dunkel.
 - **Screenshot** im MVR-Modus live nach `--time` Sekunden, damit Art-Net-Werte ankommen.
 - Hilfen: `cargo run --example mvr_info -- rig.mvr [--functions]` listet Patch, Kanäle und DMX-Bereiche; `artnet_send --set 1=255,17=255` sendet feste Werte.
-- Noch nicht: Farbrad-Split, Iris, mehr als zwei Gobo-Räder, Fixture-Meshes aus GDTF (Köpfe sind der Demo-Körper).
+- **Iris** beschneidet das Gate-Bild: Kegelwinkel `2·atan(r·tan(Zoom/2))` mit Blendenradius r, das Lichtbild zeigt die Mitte (`i_iris` = geschlossener Anteil, ohne Attribut 0 = offen, Python unverändert).
+- Noch nicht: Farbrad-Split (bräuchte ein farbiges Lichtbild statt R8, betrifft die gemeinsamen Shader), mehr als zwei Gobo-Räder, Fixture-Meshes aus GDTF (Köpfe sind der Demo-Körper).
 
 ### 13.7 Bedienung ([rust/src/camera.rs](rust/src/camera.rs), [rust/src/ui.rs](rust/src/ui.rs))
 

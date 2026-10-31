@@ -66,7 +66,7 @@ Der Rust-Port in [rust/](rust/) wird zum echten Visualizer: MVR laden, GDTF ausw
 ### Phase 5 – Simulation – umgesetzt (SPEC 13.5; Speed-Kanal und Lampenträgheit offen)
 16. `sim/motion.rs`: Ziel → Ist mit `v_max = Bereich / RealFade`, `a_max = v_max / RealAcceleration`; Defaults Pan 540° / 2,5 s, Tilt 270° / 1,8 s, Beschleunigung 0,3 s; Radfahrt, Rotationsintegration, Strobe, DMX-Glättung; Tests
 
-### Phase 6 – Renderer *(braucht 2, 3, 5)* – erster Schnitt umgesetzt (SPEC 13.6; offen: 19 Farbrad-Split/Iris, 21 Fixture-Meshes aus GDTF)
+### Phase 6 – Renderer *(braucht 2, 3, 5)* – erster Schnitt umgesetzt (SPEC 13.6; offen: 19 Farbrad-Split, 21 Fixture-Meshes aus GDTF)
 17. Kinematik: Welt = MVR-Matrix × Geometrie-Positionen × Achsrotationen → Beam-Basis; Shadow-Origin = Tilt-Pivot in Grundstellung
 18. Beam-Parameter aus GDTF (Wash = weiche Kante), Zoom überschreibt
 19. Lichtbild RGBA: n Gobo-Räder, Farbrad (Split), Iris, Frost; Mischfarbe/Dimmer als Strahlfarbe

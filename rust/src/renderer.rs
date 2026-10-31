@@ -183,7 +183,7 @@ impl Renderer {
             let light_image_inst = gu::buffer(&gl, &[], glow::DYNAMIC_DRAW)?;
             let light_image_vao = gu::vertex_array(&gl, light_image_prog, &[Layout {
                 buffer: light_image_inst,
-                attrs: &[("i_slot", 1), ("i_wheel1", 3), ("i_wheel2", 3), ("i_range1", 2), ("i_range2", 2)],
+                attrs: &[("i_slot", 1), ("i_wheel1", 3), ("i_wheel2", 3), ("i_range1", 2), ("i_range2", 2), ("i_iris", 1)],
                 instanced: true,
             }])?;
             let composite_vao = gu::vertex_array(&gl, composite_prog, &[])?;

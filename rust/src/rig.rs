@@ -132,6 +132,12 @@ impl Rig {
         };
         out.dimmer = if beam.is_some() { a.intensity } else { 0.0 };
         out.zoom = a.zoom.unwrap_or(default_angle).clamp(0.5, 120.0);
+        // the iris cuts the gate image: a narrower cone showing the image's centre
+        let aperture = a.iris.clamp(0.05, 1.0);
+        if aperture < 1.0 {
+            out.iris = 1.0 - aperture;
+            out.zoom = (2.0 * (aperture * (out.zoom.to_radians() / 2.0).tan()).atan()).to_degrees().max(0.5);
+        }
         // the renderer's focus sets edge softness and gobo blur; frost and wash optics soften both
         out.focus = if wash { 1.0 } else { (a.focus + a.frost).min(1.0) };
 

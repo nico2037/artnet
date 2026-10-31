@@ -3,6 +3,7 @@ flat in vec3 v_wheel1;
 flat in vec3 v_wheel2;
 flat in vec2 v_range1;
 flat in vec2 v_range2;
+flat in float v_aperture;     // iris radius in aperture radii; the cone is narrowed to match
 
 uniform sampler2DArray u_gobos;
 uniform float u_wheel_slots;  // open slot + one per gobo layer
@@ -39,5 +40,6 @@ float goboWheel(vec2 uv, vec3 wheel, vec2 range) {
 }
 
 void main() {
-    o_light = vec4(goboWheel(v_uv, v_wheel1, v_range1) * goboWheel(v_uv, v_wheel2, v_range2));
+    vec2 uv = v_uv * v_aperture;
+    o_light = vec4(goboWheel(uv, v_wheel1, v_range1) * goboWheel(uv, v_wheel2, v_range2));
 }

@@ -3,6 +3,7 @@ in vec3 i_wheel1;   // wheel position, rotation (rad), defocus blur (mip levels)
 in vec3 i_wheel2;
 in vec2 i_range1;   // first gobo layer of the wheel, slot count; count 0 = whole library (demo)
 in vec2 i_range2;
+in float i_iris;    // closed fraction of the iris, 0 = open (also when the attribute is not supplied)
 
 uniform vec2 u_light_grid;   // tiles per row, tile size in px
 uniform vec2 u_light_size;   // atlas size in px
@@ -12,6 +13,7 @@ flat out vec3 v_wheel1;
 flat out vec3 v_wheel2;
 flat out vec2 v_range1;
 flat out vec2 v_range2;
+flat out float v_aperture;
 
 void main() {
     vec2 corner = vec2(gl_VertexID & 1, gl_VertexID >> 1);
@@ -22,5 +24,6 @@ void main() {
     v_wheel2 = i_wheel2;
     v_range1 = i_range1;
     v_range2 = i_range2;
+    v_aperture = 1.0 - clamp(i_iris, 0.0, 0.95);
     gl_Position = vec4(px / u_light_size * 2.0 - 1.0, 0.0, 1.0);
 }
