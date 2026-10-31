@@ -9,9 +9,28 @@ pub const LENS_OFFSET: f32 = 0.14;
 pub const BEAM_LENGTH: f32 = 40.0;
 pub const BEAM_FLOATS: usize = 22; // apex 3, basis 9, cone 3 (tan half angle, length, focus), color 3, shadow origin 3 + slot 1
 pub const BODY_FLOATS: usize = 33; // pos 3, mount 9, pan 9, beam 9, lens color 3
-pub const LIGHT_FLOATS: usize = 7; // slot 1, wheel 1 (pos, rot, blur) 3, wheel 2 3
+pub const MODEL_FLOATS: usize = 15; // world columns 3×3, translation 3, emissive 3
+
+/// One GDTF model part placed in the world (see `Renderer::set_models`).
+#[derive(Clone, Copy, Debug)]
+pub struct ModelInstance {
+    pub mesh: u32,
+    pub world: glam::Mat4,
+    pub emissive: Vec3,
+}
+pub const LIGHT_FLOATS: usize = 19; // slot 1, wheels 3 + 3, layer ranges 2 + 2, iris 1, colour split 3 + 3 + 1
 pub const WHEEL_PLANES: [f32; 2] = [0.0, 0.3]; // focus value at which each gobo wheel is sharp
 pub const FOCUS_BLUR: f32 = 8.0; // mip levels of blur per unit of defocus
+
+/// Orientation and lens position from a GDTF geometry chain (overrides `pos`/`hanging`/`pan`/`tilt`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Pose {
+    /// Base, yoke and beam frames in the convention of `frames()`.
+    pub mount: Mat3,
+    pub pan_frame: Mat3,
+    pub beam: Mat3,
+    pub lens: Vec3,
+}
 
 #[derive(Clone, Debug)]
 pub struct Fixture {
@@ -30,6 +49,17 @@ pub struct Fixture {
     pub prism: u32, // facet count, 0 = out
     pub prism_rot: f32,
     pub prism_spread: f32, // deflection per facet, degrees
+    /// GDTF wheels: (first gobo layer, slot count); `gobo` is then the 0-based slot position.
+    /// None = demo wheel over the whole gobo library.
+    pub gobo_range: Option<(u32, u32)>,
+    pub gobo2_range: Option<(u32, u32)>,
+    /// Closed fraction of the iris (0 = open). The cone angle shrinks with it; the light image is cropped.
+    pub iris: f32,
+    /// Colour wheel between two slots: (current slot colour, next slot colour, scroll fraction 0..1).
+    pub color_split: Option<(Vec3, Vec3, f32)>,
+    /// Drawn by its GDTF models instead of the generic body.
+    pub custom_body: bool,
+    pub pose: Option<Pose>,
 }
 
 impl Default for Fixture {
@@ -50,12 +80,21 @@ impl Default for Fixture {
             prism: 0,
             prism_rot: 0.0,
             prism_spread: 7.0,
+            gobo_range: None,
+            gobo2_range: None,
+            iris: 0.0,
+            custom_body: false,
+            color_split: None,
+            pose: None,
         }
     }
 }
 
 /// (mount, pan frame, beam basis); beam basis maps beam axis +Z into the world.
 fn frames(f: &Fixture) -> (Mat3, Mat3, Mat3) {
+    if let Some(p) = f.pose {
+        return (p.mount, p.pan_frame, p.beam);
+    }
     let mount = if f.hanging { Mat3::from_rotation_x(PI) } else { Mat3::IDENTITY };
     let pan_frame = mount * Mat3::from_rotation_y(f.pan.to_radians());
     let beam = pan_frame * Mat3::from_rotation_x(f.tilt.to_radians()) * Mat3::from_rotation_x(-FRAC_PI_2);
@@ -72,7 +111,7 @@ pub fn aim_at(f: &Fixture, target: Vec3) -> (f32, f32) {
 
 pub fn build_body_instances(fixtures: &[Fixture]) -> Vec<f32> {
     let mut out = Vec::with_capacity(fixtures.len() * BODY_FLOATS);
-    for f in fixtures {
+    for f in fixtures.iter().filter(|f| !f.custom_body) {
         let (mount, pan_frame, beam) = frames(f);
         out.extend(f.pos.to_array());
         out.extend(mount.to_cols_array());
@@ -86,12 +125,20 @@ pub fn build_body_instances(fixtures: &[Fixture]) -> Vec<f32> {
 /// Per fixture: everything in front of the lens, composed into one light image tile.
 pub fn build_light_instances(fixtures: &[Fixture]) -> Vec<f32> {
     let mut out = Vec::with_capacity(fixtures.len() * LIGHT_FLOATS);
+    let range = |r: Option<(u32, u32)>| r.map_or([0.0, 0.0], |(base, n)| [base as f32, n as f32]);
     for (i, f) in fixtures.iter().enumerate() {
         out.extend([
             i as f32,
             f.gobo, f.gobo_rot.to_radians(), (f.focus - WHEEL_PLANES[0]).abs() * FOCUS_BLUR,
             f.gobo2, f.gobo2_rot.to_radians(), (f.focus - WHEEL_PLANES[1]).abs() * FOCUS_BLUR,
         ]);
+        out.extend(range(f.gobo_range));
+        out.extend(range(f.gobo2_range));
+        out.push(f.iris);
+        let (c1, c2, split) = f.color_split.unwrap_or((Vec3::ONE, Vec3::ONE, 0.0));
+        out.extend(c1.to_array());
+        out.extend(c2.to_array());
+        out.push(split);
     }
     out
 }
@@ -106,7 +153,7 @@ pub fn build_beam_instances(fixtures: &[Fixture]) -> Vec<f32> {
         let (_, _, base) = frames(f);
         let facets = f.prism.max(1);
         let spread = if f.prism > 0 { f.prism_spread.to_radians() } else { 0.0 };
-        let apex = f.pos + base.z_axis * LENS_OFFSET;
+        let apex = f.pose.map_or(f.pos + base.z_axis * LENS_OFFSET, |p| p.lens);
         let color = f.color * (f.dimmer / facets as f32);
         for k in 0..facets {
             let phi = f.prism_rot.to_radians() + TAU * k as f32 / facets as f32;
@@ -150,7 +197,7 @@ mod tests {
     #[test]
     fn prism_splits_into_deflected_facets() {
         let f = Fixture { prism: 3, prism_spread: 7.0, ..Default::default() };
-        let data = build_beam_instances(&[f.clone()]);
+        let data = build_beam_instances(std::slice::from_ref(&f));
         assert_eq!(data.len(), 3 * BEAM_FLOATS);
         for beam in data.chunks(BEAM_FLOATS) {
             let az = Vec3::new(beam[9], beam[10], beam[11]);

@@ -6,14 +6,27 @@ description = "Volumetric moving head visualizer (Rust port of the Python protot
 
 [dependencies]
 anyhow = "1"
+artnet_protocol = "0.4"
 bytemuck = "1"
+clap = { version = "4", features = ["derive"] }
+ds3 = "0.1"
+egui = "0.31"
+egui-winit = "0.31"
+egui_glow = "0.31"
+gdtf = "0.3"
 glam = "0.29"
 glow = "0.16"
+gltf = "1"
 glutin = "0.32"
 glutin-winit = "0.5"
 png = "0.17"
 raw-window-handle = "0.6"
+roxmltree = "0.21"
+serde = "1"
+serde_json = "1"
+socket2 = { version = "0.6", features = ["all"] }
 winit = "0.30"
+zip = { version = "8", default-features = false, features = ["deflate"] }
 
 [profile.dev]
 opt-level = 1

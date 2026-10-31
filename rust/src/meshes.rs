@@ -1,4 +1,7 @@
-use glam::Vec3;
+use std::f32::consts::PI;
+
+use anyhow::{anyhow, Context, Result};
+use glam::{Mat4, Vec3};
 
 /// Triangle soup with flat normals; triangles are CCW seen from outside (the beam passes rely on it).
 pub struct Mesh {
@@ -86,6 +89,56 @@ pub fn fixture_body_mesh() -> Vec<f32> {
         }
     }
     out
+}
+
+/// Triangle list of a 3DS or glTF/GLB file (by extension). 3DS keeps its file units and axes;
+/// glTF (Y-up) is turned Z-up so both match MVR and GDTF axes, in the file's units.
+pub fn file_triangles(name: &str, data: &[u8]) -> Result<Vec<Vec3>> {
+    let lower = name.to_lowercase();
+    if lower.ends_with(".3ds") {
+        let parsed = ds3::parse(data).map_err(|e| anyhow!("{e}"))?;
+        let mut tris = Vec::new();
+        for mesh in &parsed.meshes {
+            for f in &mesh.faces {
+                tris.extend(f.iter().map(|&i| Vec3::from(mesh.vertices[i as usize])));
+            }
+        }
+        Ok(tris)
+    } else if lower.ends_with(".glb") || lower.ends_with(".gltf") {
+        let (doc, buffers, _) = gltf::import_slice(data).context("glTF")?;
+        let mut tris = Vec::new();
+        let z_up = Mat4::from_rotation_x(PI / 2.0);
+        let scene_root = doc.default_scene().or_else(|| doc.scenes().next()).ok_or_else(|| anyhow!("no scene"))?;
+        let mut stack: Vec<(gltf::Node, Mat4)> = scene_root.nodes().map(|n| (n, z_up)).collect();
+        while let Some((node, parent)) = stack.pop() {
+            let m = parent * Mat4::from_cols_array_2d(&node.transform().matrix());
+            if let Some(mesh) = node.mesh() {
+                for prim in mesh.primitives() {
+                    let reader = prim.reader(|b| buffers.get(b.index()).map(|d| &d.0[..]));
+                    let Some(positions) = reader.read_positions() else { continue };
+                    let pos: Vec<Vec3> = positions.map(|p| m.transform_point3(Vec3::from(p))).collect();
+                    match reader.read_indices() {
+                        Some(idx) => tris.extend(idx.into_u32().filter_map(|i| pos.get(i as usize).copied())),
+                        None => tris.extend(pos),
+                    }
+                }
+            }
+            stack.extend(node.children().map(|c| (c, m)));
+        }
+        Ok(tris)
+    } else {
+        Err(anyhow!("unsupported mesh format"))
+    }
+}
+
+/// Interleaved (pos 3, normal 3) with flat normals, for meshes placed by a transform.
+pub fn interleave_flat(tris: &[Vec3], out: &mut Vec<f32>) {
+    for t in tris.chunks_exact(3) {
+        let n = (t[1] - t[0]).cross(t[2] - t[0]).normalize_or_zero();
+        for p in t {
+            out.extend([p.x, p.y, p.z, n.x, n.y, n.z]);
+        }
+    }
 }
 
 /// Interleaved (pos 3, normal 3, albedo 3).

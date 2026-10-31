@@ -1,4 +1,5 @@
 use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
@@ -6,19 +7,32 @@ use glow::HasContext;
 
 pub const GOBO_SIZE: usize = 256;
 
-/// Grayscale (ITU-R 601 luma, like Pillow's "L") resampled to GOBO_SIZE².
-fn load_gray(path: &Path) -> Result<Vec<u8>> {
-    let mut decoder = png::Decoder::new(File::open(path)?);
+/// PNG decoded to 8-bit samples (1-4 channels).
+struct Image {
+    width: usize,
+    height: usize,
+    channels: usize,
+    data: Vec<u8>,
+}
+
+fn decode_png(reader: impl Read) -> Result<Image> {
+    let mut decoder = png::Decoder::new(reader);
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder.read_info()?;
-    let mut buf = vec![0; reader.output_buffer_size()];
-    let info = reader.next_frame(&mut buf)?;
-    let (w, h) = (info.width as usize, info.height as usize);
-    let ch = info.color_type.samples();
-    let luma = |x: usize, y: usize| -> f32 {
-        let p = &buf[(y * w + x) * ch..];
-        if ch >= 3 { 0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32 } else { p[0] as f32 }
-    };
+    let mut data = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut data)?;
+    Ok(Image { width: info.width as usize, height: info.height as usize, channels: info.color_type.samples(), data })
+}
+
+/// ITU-R 601 luma, like Pillow's "L".
+fn luma(p: &[u8], channels: usize) -> f32 {
+    if channels >= 3 { 0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32 } else { p[0] as f32 }
+}
+
+/// `value` per source pixel, bilinearly resampled to GOBO_SIZE².
+fn resample(img: &Image, value: impl Fn(&[u8]) -> f32) -> Vec<u8> {
+    let (w, h, ch) = (img.width, img.height, img.channels);
+    let at = |x: usize, y: usize| value(&img.data[(y * w + x) * ch..]);
     let mut out = vec![0u8; GOBO_SIZE * GOBO_SIZE];
     for y in 0..GOBO_SIZE {
         for x in 0..GOBO_SIZE {
@@ -27,16 +41,31 @@ fn load_gray(path: &Path) -> Result<Vec<u8>> {
             let (x0, y0) = (sx as usize, sy as usize);
             let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
             let (fx, fy) = (sx - x0 as f32, sy - y0 as f32);
-            let top = luma(x0, y0) * (1.0 - fx) + luma(x1, y0) * fx;
-            let bottom = luma(x0, y1) * (1.0 - fx) + luma(x1, y1) * fx;
+            let top = at(x0, y0) * (1.0 - fx) + at(x1, y0) * fx;
+            let bottom = at(x0, y1) * (1.0 - fx) + at(x1, y1) * fx;
             out[y * GOBO_SIZE + x] = (top * (1.0 - fy) + bottom * fy).round() as u8;
         }
     }
-    Ok(out)
+    out
 }
 
-/// All *.png in `dir` (sorted) as one R8 texture array with mipmaps; returns (texture, gobo count).
-pub unsafe fn load_gobos(gl: &glow::Context, dir: &Path) -> Result<(glow::Texture, usize)> {
+/// Grayscale resampled to GOBO_SIZE².
+fn load_gray(path: &Path) -> Result<Vec<u8>> {
+    let img = decode_png(File::open(path)?)?;
+    let ch = img.channels;
+    Ok(resample(&img, |p| luma(p, ch)))
+}
+
+/// GDTF wheel image as transmission (alpha × brightness; transparent = gobo holder) at GOBO_SIZE².
+pub fn gobo_transmission(png: &[u8]) -> Result<Vec<u8>> {
+    let img = decode_png(png)?;
+    let ch = img.channels;
+    let has_alpha = ch == 2 || ch == 4;
+    Ok(resample(&img, |p| luma(p, ch) * if has_alpha { p[ch - 1] as f32 / 255.0 } else { 1.0 }))
+}
+
+/// All *.png in `dir` (sorted) as GOBO_SIZE² grayscale layers.
+pub fn load_gobo_dir(dir: &Path) -> Result<Vec<Vec<u8>>> {
     let mut files: Vec<_> = std::fs::read_dir(dir)
         .map(|entries| {
             entries
@@ -46,13 +75,16 @@ pub unsafe fn load_gobos(gl: &glow::Context, dir: &Path) -> Result<(glow::Textur
         })
         .unwrap_or_default();
     files.sort();
-    let mut data = Vec::new();
-    for f in &files {
-        data.extend(load_gray(f).with_context(|| format!("loading gobo {}", f.display()))?);
-    }
-    let layers = files.len().max(1);
-    if files.is_empty() {
-        data = vec![255; GOBO_SIZE * GOBO_SIZE];
+    files.iter().map(|f| load_gray(f).with_context(|| format!("loading gobo {}", f.display()))).collect()
+}
+
+/// Gobo layers as one R8 texture array with mipmaps (a single clear layer when empty).
+pub(crate) unsafe fn upload_gobos(gl: &glow::Context, gobos: &[Vec<u8>]) -> Result<glow::Texture> {
+    let layers = gobos.len().max(1);
+    let data = if gobos.is_empty() { vec![255; GOBO_SIZE * GOBO_SIZE] } else { gobos.concat() };
+    let max_layers = gl.get_parameter_i32(glow::MAX_ARRAY_TEXTURE_LAYERS) as usize;
+    if layers > max_layers {
+        return Err(anyhow!("{layers} gobo layers exceed GL_MAX_ARRAY_TEXTURE_LAYERS ({max_layers})"));
     }
 
     let tex = gl.create_texture().map_err(|e| anyhow!(e))?;
@@ -67,12 +99,12 @@ pub unsafe fn load_gobos(gl: &glow::Context, dir: &Path) -> Result<(glow::Textur
     gl.tex_parameter_i32(glow::TEXTURE_2D_ARRAY, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
     gl.tex_parameter_i32(glow::TEXTURE_2D_ARRAY, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
     gl.tex_parameter_i32(glow::TEXTURE_2D_ARRAY, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
-    Ok((tex, files.len()))
+    Ok(tex)
 }
 
 /// Tileable smooth 3D noise: random values blurred with a periodic Gaussian (same character as the
 /// Python version, not bit-identical).
-pub unsafe fn noise_texture(gl: &glow::Context) -> Result<glow::Texture> {
+pub(crate) unsafe fn noise_texture(gl: &glow::Context) -> Result<glow::Texture> {
     const N: usize = 32;
     const SIGMA: f32 = 1.2;
     let mut state: u64 = 0x9E37_79B9_7F4A_7C15;

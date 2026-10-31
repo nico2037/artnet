@@ -39,19 +39,30 @@ float ign(vec2 p) {
     return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
 }
 
-float lightImage(vec2 uv, float slot) {
+// COLOR_IMAGE: the light image is RGB (colour wheel split); otherwise one transmission channel.
+#ifdef COLOR_IMAGE
+#define LIGHT vec3
+#define LIGHT_CHANNELS(c) (c).rgb
+#define LIGHT_PEAK(m) max((m).r, max((m).g, (m).b))
+#else
+#define LIGHT float
+#define LIGHT_CHANNELS(c) (c).r
+#define LIGHT_PEAK(m) (m)
+#endif
+
+LIGHT lightImage(vec2 uv, float slot) {
     vec2 cell = vec2(mod(slot, u_light_grid.x), floor(slot / u_light_grid.x)) * u_light_grid.y;
     vec2 px = clamp(cell + (uv * 0.5 + 0.5) * u_light_grid.y, cell + 0.5, cell + u_light_grid.y - 0.5);
-    return texture(u_light_image, px / u_light_size).r;
+    return LIGHT_CHANNELS(texture(u_light_image, px / u_light_size));
 }
 
 // l: point in beam space (apex at origin, beam along +z). Returns transmitted fraction 0..1.
-float beamMask(vec3 l, float tanHalf, float focus, float slot) {
-    if (l.z <= 0.0) return 0.0;
+LIGHT beamMask(vec3 l, float tanHalf, float focus, float slot) {
+    if (l.z <= 0.0) return LIGHT(0.0);
     vec2 uv = l.xy / (l.z * tanHalf);
     float soft = mix(0.03, 0.35, focus);
     float m = 1.0 - smoothstep(1.0 - soft, 1.0, length(uv));
-    if (m <= 0.0) return 0.0;
+    if (m <= 0.0) return LIGHT(0.0);
     return m * lightImage(uv, slot);
 }
 

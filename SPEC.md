@@ -279,7 +279,7 @@ DMX liefert nur Ziele; Motor folgt mit begrenzter Geschwindigkeit/Beschleunigung
 
 1:1-Nachbau des Python-Stands mit identischer Architektur, Konstanten, Zeitleiste und Tastenbelegung.
 
-**Crates** (kompatibel mit rustc 1.83): `winit 0.30` (Fenster/Tastatur), `glutin 0.32` + `glutin-winit 0.5` (GL-3.3-Core-Kontext, VSync aus), `glow 0.16` (OpenGL), `glam 0.29` (Mathematik), `png 0.17`, `bytemuck`, `anyhow`. Bewusst ohne `clap`/`image` (neueste Versionen brauchen Cargo ≥ 1.85); `unicode-segmentation` (via winit) im `Cargo.lock` auf 1.12.0 gepinnt.
+**Crates** (Rust ≥ 1.85): `winit 0.30` (Fenster/Tastatur), `glutin 0.32` + `glutin-winit 0.5` (GL-3.3-Core-Kontext, VSync aus), `glow 0.16` (OpenGL), `glam 0.29` (Mathematik), `png 0.17`, `bytemuck`, `anyhow`, `clap` (CLI), `artnet_protocol` + `socket2` (Art-Net, siehe 13.).
 
 **Shader:** die Dateien aus [shaders/](shaders/) werden per `include_str!` eingebettet → eine Quelle für Python und Rust, Binary ohne externe Shader-Dateien. Gobos zur Laufzeit aus `gobos/` (`--gobo-dir`).
 
@@ -290,11 +290,11 @@ DMX liefert nur Ziele; Motor folgt mit begrenzter Geschwindigkeit/Beschleunigung
 | [renderer.py](renderer.py) | [rust/src/renderer.rs](rust/src/renderer.rs), [rust/src/gl_util.rs](rust/src/gl_util.rs), [rust/src/resources.rs](rust/src/resources.rs) |
 | [main.py](main.py) | [rust/src/demo.rs](rust/src/demo.rs) (Bühne, Rig, `animate`, `ManualControl`), [rust/src/main.rs](rust/src/main.rs) (CLI, Event-Loop), [rust/src/window.rs](rust/src/window.rs) |
 
-**Bedienung:** `cargo run --release -- [--quality …] [--fixtures N] [--manual] [--target-fps F] [--screenshot FILE --time T]`; zusätzlich `--bench N` (N Frames ab `--time`, 30 Warm-up, t += 1/60 je Frame, glFinish → ms/Frame).
+**Bedienung:** `cargo run --release -- [--quality …] [--fixtures N] [--manual] [--target-fps F] [--screenshot FILE --time T] [--artnet [--artnet-ip IP] [--artnet-universes 0,1,…]]`; zusätzlich `--bench N` (N Frames ab `--time`, 30 Warm-up, t += 1/60 je Frame, glFinish → ms/Frame).
 
 **Abweichungen:** Dunst-Rauschen mit eigenem PRNG + periodischem separablem Gauß statt numpy-FFT (gleiche Charakteristik, nicht bit-identisch). Render-Targets in physischer Fenstergröße (Retina: mehr Pixel als unter pygame). Fenster frei skalierbar: Render-Targets und Projektion folgen der Fenstergröße.
 
-**Tests** (`cargo test`, 9): Strahlrichtung neutral, `aim_at`-Roundtrip (hängend/stehend), Prisma-Facetten (Winkel, Gewicht), dunkle Köpfe ohne Strahlen, Kegel/Quader-Winding, Atlas-Layout, Radfahrt vorwärts + Wrap, manuelles Rad ohne Volldrehung.
+**Tests** (`cargo test`, 48 + 8): Strahlrichtung neutral, `aim_at`-Roundtrip (hängend/stehend), Prisma-Facetten (Winkel, Gewicht), dunkle Köpfe ohne Strahlen, Kegel/Quader-Winding, Atlas-Layout, Radfahrt vorwärts + Wrap, manuelles Rad ohne Volldrehung; Art-Net: DMX-Puffer ohne Padding, Sequenz (verspätet verworfen, Neustart angenommen), PollReply-Gruppierung (4 Ports pro Sub-Net, Net, leerer Patch), UDP-Empfang + PollReply über Loopback; Universe-Offset (2); MVR: Adressen, Matrix, Z-up → Y-up, Szene mit Gruppen/Symbolen, GDTF-Auflösung, unbekannter Symdef; GDTF: Highlight-Ergänzung (2); Fixture-Typ: CIE → RGB, GDTF-Matrix, Gobo-Dedupe, Modell auf GDTF-Maße skaliert; Resolver: DMXValue, Attributnamen, 16 Bit, Wheel-Sets, ModeMaster, Strobe-Bereich, CMY, Defaults, Invert über Universe-Grenze, Multiply. Rig: Pose hängend, Tilt/Pan schwenken den Strahl. Kamera: look_at-Roundtrip, Orbit (Abstand, Pitch-Grenze, Richtung), Pan in der Bildebene, Zoom/Einpassen. Bewegung: Achse ohne Überschwingen, kurze Wege, RealFade, Rad-Kurzweg, Spin/Rotation, Strobe, Glättung. Integrationstests (8, u. a. MegaPointe gegen ihre DMX-Tabelle, Pipeline Art-Net → Ist-Wert) `tests/testdata_spike.rs` gegen `testdata/`.
 
 **Parität Bild** (Qualität low = ohne Rauschen, 1280×720, Python vs. Rust):
 
@@ -320,7 +320,7 @@ GPU-gebunden → praktisch gleich. Der Rust-Vorteil liegt bei CPU-Arbeit (Art-Ne
 
 ## 13. Geplant: Art-Net-Visualizer mit MVR/GDTF
 
-Status: geplant, nicht umgesetzt. Ablauf und Phasen in [PLAN.md](PLAN.md).
+Status: Art-Net-Empfang (Phase 1), Library-Spike (Phase 0), GDTF-Auswertung (Phase 2), MVR-Reader (Phase 3), DMX → Attribute (Phase 4) und Bewegungsmodell (Phase 5) umgesetzt; Renderer-Anbindung (Phase 6) folgt. Ablauf und Phasen in [PLAN.md](PLAN.md).
 
 **Ziel:** Der Rust-Port wird zum Visualizer für echte Pulte (ChamSys MagicQ, grandMA, Eigenentwicklung). Rig und Patch kommen aus einer MVR-Datei, das Verhalten jedes Scheinwerfers aus seiner GDTF, die Werte per Art-Net.
 
@@ -346,8 +346,8 @@ flowchart LR
 | Teil | Lösung |
 |---|---|
 | Art-Net-Pakete | `artnet_protocol` + `socket2` (Port 6454 teilen, Broadcast) |
-| GDTF lesen | `gdtf` (Objektmodell + Ressourcen) |
-| DMX → Attribut | `zeevonk` nach Test, sonst eigener Resolver |
+| GDTF lesen | `gdtf` (Objektmodell + Ressourcen), über `io::gdtf::load` (ergänzt fehlendes `Highlight`) |
+| DMX → Attribut | eigener Resolver `dmx::resolve` (`zeevonk` verworfen, siehe Spike) |
 | MVR | eigener Parser auf `zip` + `roxmltree` |
 | 3D-Modelle | `ds3` (3DS), `gltf` (GLB) |
 | UI | `egui` + `egui-winit` + `egui_glow` |
@@ -367,4 +367,84 @@ flowchart LR
 
 **Nicht geplant:** sACN, MVR-xchange, LED-Multicell, Animationsrad, Shaper, Video/Media-Server, Laser, Rig-Editor, mehrere Beams pro Fixture.
 
-**Voraussetzungen:** Testdateien in `testdata/`, aktuelles Rust (`rustup default stable`, ≥ 1.85).
+**Voraussetzungen:** Testdateien in `testdata/` (siehe [testdata/README.md](testdata/README.md)), aktuelles Rust (`rustup default stable`, ≥ 1.85).
+
+### 13.1 Library-Spike (Phase 0)
+
+`cargo test --test testdata_spike -- --nocapture` gegen `testdata/` (+ `testdata/external/` nach `python tools/fetch_testdata.py`):
+
+| Library | Ergebnis | Entscheidung |
+|---|---|---|
+| `gdtf` 0.3 | lehnt 5 von 8 echten GDTFs ab (Clay Paky, Robe, ADB aus Capture): Pflichtfeld `DMXChannel/@Highlight`, laut Spec optional. Mit ergänztem `Highlight="None"` lesen alle; Modi, ChannelFunctions, Räder, Prisma-Facetten (MegaPointe: 7 Räder, 61 Facetten), Modelle vollständig | nutzen, Loader repackt `description.xml` im Speicher |
+| `zeevonk` 0.3 | löst Attribute → DMX auf (Pult-Richtung), nicht DMX → Attribute; zieht `libftd2xx` (FTDI-Treiber) und `gdtf` 0.2 | verworfen, eigener Resolver |
+| `ds3` 0.1 | alle 3DS-Dateien (899 in MVR-Szenen, dazu die GDTF-Modelle) | nutzen |
+| `gltf` 1.4 | 100/100 GLB-Dateien | nutzen |
+| `zip` 8 + `roxmltree` | MVR mit 2 267 Mesh-Instanzen, 76 Fixtures in < 0,1 s | nutzen |
+
+Weitere Befunde aus den Testdaten:
+- Capture-Exporte enthalten GDTFs ohne Räder und Modelle; MVR-Beispiele ohne Rad-Bilder → Renderer braucht Fallbacks (Slot ohne Bild = offen bzw. Farbe, Gerät ohne Modell = Standard-Körper).
+- `GDTFSpec` steht teils ohne `.gdtf`-Endung in der MVR.
+- Absolute Adresse `0` = nicht gepatcht.
+- `FocusPoint` kann Geometrie tragen (Marker); wird nicht gezeichnet.
+- Die GDTFs im Capture-Export sind Platzhalter (eine Geometrie, Dummy-Kanäle `Dimmer1…n`); brauchbare Geräte in den Testdaten: MegaPointe, BeskydBeam, LED-PAR, Pendant.
+- `gdtf` speichert Namen mit Zeichen außerhalb von GDTF-Anhang C als `_` (`[Lamp Dmx]` → `_Lamp Dmx_`); Modus-Suche läuft daher über `Name::new_lossy`.
+- `gdtf` macht Matrizen nicht zugänglich; `fixture_type` liest sie über die Serialisierung (`serde_json`).
+
+### 13.2 MVR-Reader ([rust/src/io/mvr.rs](rust/src/io/mvr.rs))
+
+`Scene::load(path)` → `fixtures` (UUID, Name, FixtureID/-Numeric, GDTF + Mode, Adressen je Break, Invert Pan/Tilt, Layer, Welt-Matrix), `meshes` (Datei, Objektart, Name, Welt-Matrix) und alle Dateien des Archivs. Layer/GroupObject/ChildList rekursiv, Matrizen kumuliert, `Symbol` → `Symdef` rekursiv (max. 16 Ebenen). Matrix `{u}{v}{w}{o}` = Spalten. Fixture-Matrix: lokal Y-up in m → Welt Y-up in m (`to_world`); Mesh-Matrix: Dateikoordinaten (MVR-Einheit, Z-up) → Welt, Einheitenfaktor (3DS mm, glTF m) setzt der Mesh-Loader.
+
+### 13.3 GDTF-Auswertung ([rust/src/fixture_type.rs](rust/src/fixture_type.rs))
+
+`FixtureType::from_gdtf(file, mode, gobos)` für einen DMX-Modus:
+- **Geometrie-Kette** ab der Wurzel-Geometrie des Modus als flache Liste (Eltern vor Kind) mit lokaler Matrix (GDTF-Achsen, m) und Modell; `rest_transform(part)` = Kette in Grundstellung. `GeometryReference` und Exoten werden nicht aufgeklappt.
+- **Pan/Tilt-Achse** = Geometrie des DMX-Kanals mit Attribut `Pan`/`Tilt` (MegaPointe: Yoke/Head).
+- **Beam**: erste Beam-Geometrie, Art (Spot; PC/Fresnel → Wash; sonst Glow), Beam-/Field-Winkel, Radius, Lichtstrom.
+- **Räder**: Slots mit Farbe (CIE xyY → lineares sRGB, Y = Transmission), Gobo-Bild als Layer in der `GoboLibrary` (Transmission = Alpha × Helligkeit, 256², identische Bilder einmal), Prisma-Facetten (Farbe + 2D-Affin 3×3). Filter-Slots (`Filter=`) vorerst klar.
+- **Modelle**: Datei + Maße (L×B×H); Laden und Skalieren der Meshes folgt mit dem Renderer (Phase 6), ebenso Upload der GoboLibrary als Texture-Array mit Prüfung gegen `GL_MAX_ARRAY_TEXTURE_LAYERS`.
+- Fehlende Rad-Bilder zählen in `missing_media`, der Slot bleibt offen.
+
+### 13.4 DMX → Attribute ([rust/src/dmx/resolve.rs](rust/src/dmx/resolve.rs))
+
+`Profile::from_gdtf(file, mode, fixture_type)` flacht den Modus einmal ab: Kanäle (Break, Offsets MSB zuerst, Default der InitialFunction) mit ChannelFunctions (Attribut → `Feature`, DMXFrom, Physical-Bereich, RealFade/-Acceleration, Rad, ModeMaster, ChannelSets mit Slot, Relation Multiply). Pro Frame:
+1. `read(addresses, dmx)`: Rohwerte je Kanal aus den Universen; Footprint darf ins nächste Universe laufen; ohne Daten bleibt der Default.
+2. `resolve(raw, invert_pan, invert_tilt)` → `Target`: Invert auf Rohwert; aktive Funktion = größtes DMXFrom ≤ Wert unter den Funktionen, deren ModeMaster-Bedingung gilt; physikalischer Wert linear bis zum Beginn der nächsten Funktion; ChannelSet → Slot.
+
+**DMXValue** `n/b` in einen Kanal mit k Bytes: ohne `s` Byte-Mirroring (255/1 → 65535/2), mit `s` Shift (255/1s → 65280/2), mehr Bytes → abschneiden.
+
+**Abbildung:** Pan/Tilt (Grad, Bereich und Timing für das Bewegungsmodell), Dimmer, Shutter (offen/zu/Strobe Hz, Random, Pulse), ColorAdd R/G/B/W/A, ColorSub C/M/Y, CTO, `Color{n}`/`Gobo{n}`/`Prism{n}` als Rad-Ziel (Slot, Index-Winkel `…Pos`, Rotation `…PosRotate`, Radrotation `…WheelSpin`), Zoom (Grad), Focus, Iris, Frost (anteilig 0..1). Alles andere (Steuerkanäle, Effektrad, Shaper, Animationsrad) wird ignoriert.
+
+**Befunde:** `gdtf` speichert `WheelSlotIndex` 0-basiert (GDTF 1 = erster Slot). MegaPointe nutzt ModeMaster auch für den Zoom (zwei Bereiche je nach Gobo 2).
+
+### 13.5 Bewegungsmodell ([rust/src/sim/motion.rs](rust/src/sim/motion.rs))
+
+`Motion::new(target)` startet in Ruhe am Ziel; `Motion::step(target, fixture_type, dt)` → `Actual` (Ist-Zustand für den Renderer):
+- **Pan/Tilt** je eine `Axis`: `v_max = Bereich / RealFade`, `a_max = v_max / RealAcceleration`; Defaults Pan 540°/2,5 s, Tilt 270°/1,8 s, Beschleunigung 0,3 s. Bremsgeschwindigkeit in diskreter Form `−a·dt/2 + sqrt((a·dt/2)² + 2·a·|err|)`, damit das Ziel ohne Überschwingen und ohne Kriechen erreicht wird.
+- **Räder**: Slot-Fahrt 0,35 s pro Slot auf dem kürzeren Weg, `WheelSpin` dreht das Rad (°/s → Slots/s), `PosRotate` dreht den Slot, Index fährt mit 360°/s auf dem kürzeren Weg.
+- **Strobe**: Tor mit 25 % Öffnungszeit pro Periode; Random variiert jede Periode zwischen 0,5- und 1,5-facher Rate.
+- **Glättung**: Dimmer, Farbe, Zoom, Focus, Iris, Frost mit Tiefpass τ = 30 ms gegen DMX-Stufen.
+- Noch nicht: Pan/Tilt-Speed-Kanal (`PositionMSpeed`), Lampenträgheit (Halogen/Entladung).
+
+MegaPointe (RealFade 3,134 s, RealAcceleration 0,549 s): 270° Pan in 2,08 s, erwartet 270/(540/3,134) + 0,549 = 2,12 s (`tests/pipeline.rs`, Art-Net über Loopback bis zum Ist-Wert).
+
+### 13.6 MVR-Rig im Renderer ([rust/src/rig.rs](rust/src/rig.rs))
+
+`vol_light --mvr rig.mvr` lädt das Rig statt der Demo und empfängt immer Art-Net; das ArtPollReply meldet die Universen des Patches. MVR-Universum U ↔ Port-Address `U − --first-mvr-universe` (Default 1, also MVR 1 = Art-Net 0).
+- **Rig**: pro (GDTF, Mode) einmal `FixtureType` + `Profile`; pro Fixture `Target` → `Motion` → `Actual` je Frame. Fixtures mit fehlendem/defektem GDTF werden mit Grund übersprungen und auf der Konsole gemeldet.
+- **Pose**: Welt = MVR-Matrix × Rx(−90°) (GDTF Z-up → lokal Y-up) × Geometrie-Kette; Pan dreht den Pan-Teil um lokal Z, Tilt den Tilt-Teil um lokal X. Daraus `fixtures::Pose { mount, pan_frame, beam, lens }`; der Renderer nimmt die Pose statt seiner Demo-Kinematik, Strahlursprung = Beam-Geometrie, Schatten-Origin = Tilt-Pivot. Demo-Fixtures haben keine Pose und rendern unverändert (Screenshot bitgleich).
+- **Lichtbild**: die ersten zwei Gobo-Räder mit Bildern belegen die zwei Gobo-Ebenen des Renderers. `GoboLibrary` legt die Slots eines Rads zusammenhängend ins Texture-Array (Slot ohne Bild = klare Ebene, gleiche Räder einmal); der Shader bekommt pro Ebene `(erste Ebene, Slots)` und mischt zwischen Nachbar-Slots wie bisher. Ohne Bereich (Python, Demo) gilt der alte Pfad. Farbrad multipliziert die Mischfarbe; Prisma aus den Facetten des aktuellen Slots; Wash/Frost → weiche Kante.
+- **Szene**: MVR-Szene-Objekte (3DS in mm Z-up, glTF/GLB in m Y-up) in Welt-Dreiecke, dazu ein Boden unter dem Rig; Kamera vor und über dem Rig.
+- **GDTF ohne Beam-Geometrie** (z. B. Platzhalter aus Visualisierern) mit Dimmer bekommen einen 25°-Spot am Wurzelteil. Die Capture-Platzhalter in `testdata/capture_demo_show.mvr` haben nur `Dimmer1…n`-Kanäle und eine Geometrie; sie bleiben dunkel.
+- **Screenshot** im MVR-Modus live nach `--time` Sekunden, damit Art-Net-Werte ankommen.
+- Hilfen: `cargo run --example mvr_info -- rig.mvr [--functions]` listet Patch, Kanäle und DMX-Bereiche; `artnet_send --set 1=255,17=255` sendet feste Werte.
+- **Iris** beschneidet das Gate-Bild: Kegelwinkel `2·atan(r·tan(Zoom/2))` mit Blendenradius r, das Lichtbild zeigt die Mitte (`i_iris` = geschlossener Anteil, ohne Attribut 0 = offen, Python unverändert).
+- **Farbrad-Split**: Rust rendert das Lichtbild in RGB (`COLOR_IMAGE` im Fragment-Shader, Atlas RGBA8; Python ohne Define unverändert einkanalig). Das erste Farbrad liefert pro Fixture die Farben des aktuellen und des nächsten Slots und den Fahranteil; die Slot-Grenze wandert wie bei den Gobo-Slots durch die Apertur. Weitere Farbräder färben den Strahl mit dem nächstgelegenen Slot. Demo-Screenshot bitgleich.
+- **Fixture-Modelle**: pro GDTF-Model das Mesh aus `models/3ds/` oder `models/gltf/` (glTF nach Z-up), um den Ursprung auf Length/Width/Height skaliert; Primitive und fehlende Dateien als Quader in Modellgröße (fehlende als Hinweis im Panel). Jede Geometrie mit Modell wird mit ihrer Welt-Transformation (MVR × Kette × Pan/Tilt, `rig::part_worlds`) instanziert gezeichnet (`model.vert`, nur Rust), das Modell der Beam-Geometrie leuchtet in Strahlfarbe. Fixtures mit Modellen lassen den generischen Demo-Körper weg.
+- Noch nicht: mehr als zwei Gobo-Räder im Lichtbild, Modell-Texturen, Schatten der Fixture-Körper.
+
+### 13.7 Bedienung ([rust/src/camera.rs](rust/src/camera.rs), [rust/src/ui.rs](rust/src/ui.rs))
+
+- **Kamera** `OrbitCamera { target, distance, yaw, pitch }`: linke Maus = Orbit (0,3°/px, Pitch ±89°), Shift + links / mittlere / rechte Maus = Verschieben in der Bildebene (Punkt unter dem Cursor bleibt auf Zielebene), Mausrad = 12 % Abstand pro Raste (0,3–150 m). Tasten 1–4 = FOH, oben, links, rechts; 0 = einpassen (Rig + Boden). Beim Laden eines MVR FOH-Ansicht eingepasst. Demo-Screenshot/Benchmark nutzen weiter exakt die alten Matrizen (bitgleich).
+- **Panel** (egui 0.31 über `egui-winit` + `egui_glow` auf demselben GL-Kontext, nach dem 3D-Bild gezeichnet; Tab blendet aus, `--hide-panel`): View (FPS, Haze-Anteil, Beams, Ziel-FPS, Ansichten), Art-Net (Adresse, Pakete/s, Quellen, Zähler, angekündigte Port-Addresses, Tabelle Port ↔ MVR-Universum mit Paketen, Quelle, Alter), Patch (MVR-Pfad + Laden/Neu laden, Offset „MVR-Universum 1 = Art-Net n“ mit sofortigem neuem ArtPollReply-Inhalt, übersprungene Fixtures und Hinweise, Liste FID/Name/Typ/Adresse), ausgewähltes Fixture (DMX-Monitor des Footprints je Break, dekodierte Zielwerte, Ist-Pan/Tilt). `--select N` wählt beim Start (für Screenshots).
+- **Laden zur Laufzeit**: Pfad im Panel oder Datei aufs Fenster ziehen. Ersetzt Demo oder Rig, tauscht Gobo-Array und Szene im Renderer (`Renderer::set_scene`), startet Art-Net falls nötig und kündigt die neuen Universen an. Fehler bleiben im Panel stehen, das alte Rig bleibt.
+- Eingaben, die egui nimmt (über dem Panel, Textfeld fokussiert), gehen nicht an Kamera und Tasten. Getestet unter Xvfb mit `xdotool` (Pfad tippen + Enter, Orbit-Drag, Mausrad); Drag & Drop nur über denselben Ladepfad, nicht headless.

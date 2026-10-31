@@ -1,6 +1,6 @@
 # Plan: Art-Net-Visualizer mit MVR/GDTF (Rust)
 
-Stand: 2026-10-30 · Status: geplant, nicht umgesetzt
+Stand: 2026-10-31 · Status: Phase 0–7 umgesetzt; Phase 8 bis auf den Pult-Abgleich erledigt
 
 Der Rust-Port in [rust/](rust/) wird zum echten Visualizer: MVR laden, GDTF auswerten, Art-Net empfangen, DMX → Attribute → Bewegungsmodell → bestehender Volumetrik-Renderer. Standard-Teile über Libraries, eigen nur, wo es nichts gibt. Demo bleibt als `--demo`.
 
@@ -39,34 +39,34 @@ Der Rust-Port in [rust/](rust/) wird zum echten Visualizer: MVR laden, GDTF ausw
 ## Phasen
 
 ### Phase 0 – Grundlage und Library-Test
-1. Rust ≥ 1.85, Abhängigkeiten anlegen; Module `app/`, `render/`, `io/{mvr, models}`, `dmx/{artnet, resolve}`, `sim/{motion, state}`, `demo.rs`
-2. Spike gegen `testdata/`: `gdtf` parst alle GDTFs, `ds3`/`gltf` laden alle Modelle, `zeevonk` an 1–2 Fixtures → Entscheidung `zeevonk` vs. eigener Resolver; Ergebnis in [SPEC.md](SPEC.md)
+1. Rust ≥ 1.85, Abhängigkeiten anlegen *(erledigt: Pin entfernt, `clap` für die CLI, Art-Net-Crates; `dmx/` angelegt, übrige Module entstehen mit ihrer Phase)*; Module `app/`, `render/`, `io/{mvr, models}`, `dmx/{artnet, resolve}`, `sim/{motion, state}`, `demo.rs`
+2. *(erledigt, Ergebnis in SPEC 13.1: `gdtf` mit Highlight-Ergänzung, eigener Resolver statt `zeevonk`)* Spike gegen `testdata/`: `gdtf` parst alle GDTFs, `ds3`/`gltf` laden alle Modelle, `zeevonk` an 1–2 Fixtures → Entscheidung `zeevonk` vs. eigener Resolver; Ergebnis in [SPEC.md](SPEC.md)
 
-### Phase 1 – Art-Net *(parallel zu 2 und 3)*
+### Phase 1 – Art-Net *(parallel zu 2 und 3)* – umgesetzt
 3. Empfangs-Thread: UDP 6454 via `socket2` (Reuse, Broadcast, Interface wählbar), Parsing mit `artnet_protocol`, Universe-Puffer + Statistik
 4. ArtPoll → ArtPollReply (Universen aus Patch, je 4 Ports + BindIndex, Node-Name)
-5. Universe-Offset einstellbar (Default: MVR-Universe 1 = Art-Net 0)
+5. Universe-Offset einstellbar (Default: MVR-Universe 1 = Art-Net 0); `dmx::UniverseMap`, CLI/Panel folgen mit MVR-Patch
 6. `examples/artnet_send.rs` als Test-Sender
 
-### Phase 2 – GDTF-Auswertung
+### Phase 2 – GDTF-Auswertung – umgesetzt (SPEC 13.3; Mesh-Laden und Texture-Upload wandern in Phase 6)
 7. Fixture-Typ → Render-Typ: Geometrie-Kette (Pan/Tilt-Achse aus DMX-Kanal-Geometry), Beam-Parameter, Modelle pro Geometrie (auf Model-Maße skaliert), Räder (Gobo-Layer, Farben CIE → RGB, Prismen-Facetten)
 8. Gobo-Import: Alpha × Helligkeit, Dedupe, ein Texture-Array (Layer-Limit prüfen)
 9. Tests mit `testdata/`
 
-### Phase 3 – MVR *(eigen)*
+### Phase 3 – MVR *(eigen)* – umgesetzt (SPEC 13.2)
 10. `io/mvr.rs`: Layer/Gruppen rekursiv, Matrizen kumulieren; Fixtures (UUID, Name, FID, GDTF + Mode, Adressen/Breaks, Invert); Szene-Objekte → Meshes
 11. Koordinaten Z-up → Y-up `(x, z, −y)`, mm → m
 12. Tests: Matrix-Parsing, Adressformate, Beispiel-MVR
 
-### Phase 4 – DMX → Attribute *(braucht 0, 2, 3)*
+### Phase 4 – DMX → Attribute *(braucht 0, 2, 3)* – umgesetzt (SPEC 13.4)
 13. `dmx/resolve.rs`: Breaks, 8/16/24 Bit, aktive ChannelFunction inkl. ModeMaster, physikalischer Wert, ChannelSet → Slot, Defaults, Relations Multiply
 14. Mapping auf Zielzustand: Pan/Tilt (Invert), Dimmer, Shutter/Strobe, Farbe (RGB/W, CMY, CTO), Farbrad (Split), Gobo n (Slot, Index-Winkel oder Rotationsgeschwindigkeit), Prisma (Index/Rotation), Zoom, Focus, Iris, Frost
 15. Tests: 16 Bit, Mirroring, Funktionswahl, Wheel-Sets, ModeMaster
 
-### Phase 5 – Simulation
+### Phase 5 – Simulation – umgesetzt (SPEC 13.5; Speed-Kanal und Lampenträgheit offen)
 16. `sim/motion.rs`: Ziel → Ist mit `v_max = Bereich / RealFade`, `a_max = v_max / RealAcceleration`; Defaults Pan 540° / 2,5 s, Tilt 270° / 1,8 s, Beschleunigung 0,3 s; Radfahrt, Rotationsintegration, Strobe, DMX-Glättung; Tests
 
-### Phase 6 – Renderer *(braucht 2, 3, 5)*
+### Phase 6 – Renderer *(braucht 2, 3, 5)* – umgesetzt (SPEC 13.6; nur zwei Gobo-Räder im Lichtbild, Farbrad-Split nur fürs erste Farbrad)
 17. Kinematik: Welt = MVR-Matrix × Geometrie-Positionen × Achsrotationen → Beam-Basis; Shadow-Origin = Tilt-Pivot in Grundstellung
 18. Beam-Parameter aus GDTF (Wash = weiche Kante), Zoom überschreibt
 19. Lichtbild RGBA: n Gobo-Räder, Farbrad (Split), Iris, Frost; Mischfarbe/Dimmer als Strahlfarbe
@@ -74,7 +74,7 @@ Der Rust-Port in [rust/](rust/) wird zum echten Visualizer: MVR laden, GDTF ausw
 21. Fixture-Meshes pro (Typ, Geometrie) instanziert, Linse emissiv
 22. Statische MVR-Szene + optionaler Boden + Schatten
 
-### Phase 7 – App und Bedienung *(braucht 1, 6)*
+### Phase 7 – App und Bedienung *(braucht 1, 6)* – umgesetzt (SPEC 13.7; offen aus 24: Render-Einstellungen außer Ziel-FPS, Interface-Wahl zur Laufzeit)
 23. Kamera (eigen, ~100 Zeilen): Orbit (linke Maus), Verschieben (mittlere Maus / Shift), Zoom (Mausrad); beim MVR-Laden automatisch aufs Rig einpassen; Ansichten per Taste (FOH, oben, links, rechts); Eingaben über dem Panel gehen an egui
 24. egui-Panel: Art-Net-Status (Universen, Pakete/s, Quellen), Patch-Liste (FID, Name, Typ, Mode, U.A), DMX-Monitor + dekodierte Attribute, Render-Einstellungen (Qualität, Haze, Belichtung, Boden, Schatten), Universe-Offset, Interface
 25. MVR laden per `--mvr` und Drag & Drop, Neu-Laden; `--demo` bleibt
@@ -94,4 +94,4 @@ sACN, MVR-xchange, LED-Multicell, Animationsrad, Shaper/Blades, Video/Media-Serv
 
 - Unicast an `127.0.0.1` erreicht nur ein Programm → im Pult Broadcast empfehlen; Panel zeigt Hinweis, wenn keine Pakete ankommen.
 - Python-Version ab Phase 6 einfrieren (gemeinsame Shader werden erweitert).
-- Vor dem Start nötig: Testdateien in `testdata/`, `rustup default stable`.
+- Testdaten: `testdata/` (MIT, im Repo) und `testdata/external/` (per `python tools/fetch_testdata.py`, nicht im Repo), Details in [testdata/README.md](testdata/README.md).

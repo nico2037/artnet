@@ -1,12 +1,12 @@
 //! Deferred renderer: one instanced cone per beam (light volume), so cost scales with beam screen area.
 
-use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::Result;
 use glam::{Mat3, Mat4, Vec3};
 use glow::HasContext;
 
-use crate::fixtures::{build_beam_instances, build_body_instances, build_light_instances, Fixture};
+use crate::fixtures::{build_beam_instances, build_body_instances, build_light_instances, Fixture, ModelInstance, BODY_FLOATS};
 use crate::gl_util::{self as gu, Layout, U};
 use crate::meshes::{cone_mesh, fixture_body_mesh};
 use crate::resources::{self, GOBO_SIZE};
@@ -75,7 +75,7 @@ struct Atlas {
 }
 
 pub struct Renderer {
-    pub gl: glow::Context,
+    pub gl: Arc<glow::Context>,
     pub size: (i32, i32),
     pub quality: Quality,
     pub volume_scale: f32,
@@ -92,11 +92,20 @@ pub struct Renderer {
     light_image_prog: glow::Program,
 
     scene_vao: glow::VertexArray,
+    scene_vbo: glow::Buffer,
     scene_vertices: i32,
     shadow_vao: glow::VertexArray,
     body_vao: glow::VertexArray,
     body_vertices: i32,
     body_inst: glow::Buffer,
+    model_prog: glow::Program,
+    model_vbo: glow::Buffer,
+    model_inst: glow::Buffer,
+    model_vao: glow::VertexArray,
+    /// First vertex and vertex count per mesh id.
+    model_ranges: Vec<(i32, i32)>,
+    /// Instance data grouped by mesh: (mesh, floats).
+    model_groups: Vec<(u32, Vec<f32>)>,
     surface_vao: glow::VertexArray,
     volume_vao: glow::VertexArray,
     cone_vertices: i32,
@@ -124,19 +133,22 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub fn new(gl: glow::Context, size: (i32, i32), quality: Quality, gobo_dir: &Path, scene_vertices: &[f32]) -> Result<Self> {
+    /// `gobos`: GOBO_SIZE² R8 layers. The demo's wheels use the whole library; GDTF fixtures pass
+    /// their wheel's layer range per fixture (`Fixture::gobo_range`).
+    pub fn new(gl: Arc<glow::Context>, size: (i32, i32), quality: Quality, gobos: &[Vec<u8>], scene_vertices: &[f32]) -> Result<Self> {
         unsafe {
-            let (gobos, gobo_count) = resources::load_gobos(&gl, gobo_dir)?;
+            let gobo_count = gobos.len();
+            let gobos = resources::upload_gobos(&gl, gobos)?;
             let noise = resources::noise_texture(&gl)?;
 
             let prog = |vs: &str, fs: &str, defines: &[&str], common: bool| gu::program(&gl, vs, fs, defines, common);
             let scene_prog = prog("scene.vert", "scene.frag", &[], false)?;
             let body_prog = prog("fixture.vert", "scene.frag", &[], false)?;
-            let surface_prog = prog("beam.vert", "beam.frag", &["SURFACE"], true)?;
-            let volume_prog = prog("beam.vert", "beam.frag", &["VOLUME"], true)?;
+            let surface_prog = prog("beam.vert", "beam.frag", &["SURFACE", "COLOR_IMAGE"], true)?;
+            let volume_prog = prog("beam.vert", "beam.frag", &["VOLUME", "COLOR_IMAGE"], true)?;
             let composite_prog = prog("fullscreen.vert", "composite.frag", &[], false)?;
             let shadow_prog = prog("shadow.vert", "shadow.frag", &[], false)?;
-            let light_image_prog = prog("lightimage.vert", "lightimage.frag", &[], false)?;
+            let light_image_prog = prog("lightimage.vert", "lightimage.frag", &["COLOR_IMAGE"], false)?;
 
             let scene_vbo = gu::buffer(&gl, scene_vertices, glow::STATIC_DRAW)?;
             let scene_vao = gu::vertex_array(&gl, scene_prog, &[Layout {
@@ -161,6 +173,18 @@ impl Renderer {
                 },
             ])?;
 
+            let model_prog = prog("model.vert", "scene.frag", &[], false)?;
+            let model_vbo = gu::buffer(&gl, &[], glow::STATIC_DRAW)?;
+            let model_inst = gu::buffer(&gl, &[], glow::DYNAMIC_DRAW)?;
+            let model_vao = gu::vertex_array(&gl, model_prog, &[
+                Layout { buffer: model_vbo, attrs: &[("in_pos", 3), ("in_normal", 3)], instanced: false },
+                Layout {
+                    buffer: model_inst,
+                    attrs: &[("i_c0", 3), ("i_c1", 3), ("i_c2", 3), ("i_t", 3), ("i_emissive", 3)],
+                    instanced: true,
+                },
+            ])?;
+
             let cone: Vec<f32> = cone_mesh(CONE_SEGMENTS).iter().flat_map(|p| p.to_array()).collect();
             let cone_vbo = gu::buffer(&gl, &cone, glow::STATIC_DRAW)?;
             let beam_inst = gu::buffer(&gl, &[], glow::DYNAMIC_DRAW)?;
@@ -178,7 +202,10 @@ impl Renderer {
 
             let light_image_inst = gu::buffer(&gl, &[], glow::DYNAMIC_DRAW)?;
             let light_image_vao = gu::vertex_array(&gl, light_image_prog, &[Layout {
-                buffer: light_image_inst, attrs: &[("i_slot", 1), ("i_wheel1", 3), ("i_wheel2", 3)], instanced: true,
+                buffer: light_image_inst,
+                attrs: &[("i_slot", 1), ("i_wheel1", 3), ("i_wheel2", 3), ("i_range1", 2), ("i_range2", 2), ("i_iris", 1),
+                    ("i_color1", 3), ("i_color2", 3), ("i_split", 1)],
+                instanced: true,
             }])?;
             let composite_vao = gu::vertex_array(&gl, composite_prog, &[])?;
 
@@ -208,11 +235,18 @@ impl Renderer {
                 shadow_prog,
                 light_image_prog,
                 scene_vao,
+                scene_vbo,
                 scene_vertices: (scene_vertices.len() / 9) as i32,
                 shadow_vao,
                 body_vao,
                 body_vertices: (body.len() / 7) as i32,
                 body_inst,
+                model_prog,
+                model_vbo,
+                model_inst,
+                model_vao,
+                model_ranges: Vec::new(),
+                model_groups: Vec::new(),
                 surface_vao,
                 volume_vao,
                 cone_vertices: (cone.len() / 3) as i32,
@@ -238,6 +272,58 @@ impl Renderer {
                 light_image_count: 0,
                 gl,
             })
+        }
+    }
+
+    /// Replaces the gobo library and the static scene, e.g. after loading another MVR.
+    pub fn set_scene(&mut self, gobos: &[Vec<u8>], scene_vertices: &[f32]) -> Result<()> {
+        unsafe {
+            let texture = resources::upload_gobos(&self.gl, gobos)?;
+            self.gl.delete_texture(std::mem::replace(&mut self.gobos, texture));
+            self.gobo_count = gobos.len();
+            gu::upload(&self.gl, self.scene_vbo, scene_vertices);
+            self.scene_vertices = (scene_vertices.len() / 9) as i32;
+            // shadow maps contain the old scene
+            self.shadow_key.clear();
+        }
+        Ok(())
+    }
+
+    /// Uploads the GDTF model meshes (interleaved pos 3, normal 3); mesh ids are indices into `meshes`.
+    pub fn set_models(&mut self, meshes: &[Vec<f32>]) {
+        let mut data = Vec::new();
+        self.model_ranges.clear();
+        for m in meshes {
+            self.model_ranges.push(((data.len() / 6) as i32, (m.len() / 6) as i32));
+            data.extend_from_slice(m);
+        }
+        unsafe {
+            self.gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.model_vbo));
+            self.gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytemuck::cast_slice(&data), glow::STATIC_DRAW);
+        }
+        self.model_groups.clear();
+    }
+
+    /// Model parts to draw from the next frame on.
+    pub fn set_model_instances(&mut self, instances: &[ModelInstance]) {
+        for (_, data) in &mut self.model_groups {
+            data.clear();
+        }
+        for inst in instances {
+            let group = match self.model_groups.iter().position(|(m, _)| *m == inst.mesh) {
+                Some(g) => g,
+                None => {
+                    self.model_groups.push((inst.mesh, Vec::new()));
+                    self.model_groups.len() - 1
+                }
+            };
+            let w = inst.world;
+            let data = &mut self.model_groups[group].1;
+            data.extend(w.x_axis.truncate().to_array());
+            data.extend(w.y_axis.truncate().to_array());
+            data.extend(w.z_axis.truncate().to_array());
+            data.extend(w.w_axis.truncate().to_array());
+            data.extend(inst.emissive.to_array());
         }
     }
 
@@ -319,7 +405,7 @@ impl Renderer {
     unsafe fn compose_light_images(&mut self, fixtures: &[Fixture]) -> Result<()> {
         if fixtures.len() != self.light_image_count {
             let old = self.light_image.take();
-            self.light_image = Some(self.new_atlas(old, fixtures.len() as i32, self.quality.light_tile, &gu::R8)?);
+            self.light_image = Some(self.new_atlas(old, fixtures.len() as i32, self.quality.light_tile, &gu::RGBA8)?);
             self.light_image_count = fixtures.len();
         }
         let gl = &self.gl;
@@ -363,11 +449,23 @@ impl Renderer {
             gu::set(gl, self.scene_prog, &[("u_view_proj", U::M4(view_proj))]);
             gl.bind_vertex_array(Some(self.scene_vao));
             gl.draw_arrays(glow::TRIANGLES, 0, self.scene_vertices);
-            if !fixtures.is_empty() {
+            if !bodies.is_empty() {
                 gu::upload(gl, self.body_inst, &bodies);
                 gu::set(gl, self.body_prog, &[("u_view_proj", U::M4(view_proj))]);
                 gl.bind_vertex_array(Some(self.body_vao));
-                gl.draw_arrays_instanced(glow::TRIANGLES, 0, self.body_vertices, fixtures.len() as i32);
+                gl.draw_arrays_instanced(glow::TRIANGLES, 0, self.body_vertices, (bodies.len() / BODY_FLOATS) as i32);
+            }
+            if self.model_groups.iter().any(|(_, d)| !d.is_empty()) {
+                gu::set(gl, self.model_prog, &[("u_view_proj", U::M4(view_proj))]);
+                gl.bind_vertex_array(Some(self.model_vao));
+                for (mesh, data) in &self.model_groups {
+                    let Some(&(first, count)) = self.model_ranges.get(*mesh as usize) else { continue };
+                    if data.is_empty() || count == 0 {
+                        continue;
+                    }
+                    gu::upload(gl, self.model_inst, data);
+                    gl.draw_arrays_instanced(glow::TRIANGLES, first, count, (data.len() / crate::fixtures::MODEL_FLOATS) as i32);
+                }
             }
             gl.disable(glow::DEPTH_TEST);
 
