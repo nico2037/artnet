@@ -279,7 +279,7 @@ DMX liefert nur Ziele; Motor folgt mit begrenzter Geschwindigkeit/Beschleunigung
 
 1:1-Nachbau des Python-Stands mit identischer Architektur, Konstanten, Zeitleiste und Tastenbelegung.
 
-**Crates** (kompatibel mit rustc 1.83): `winit 0.30` (Fenster/Tastatur), `glutin 0.32` + `glutin-winit 0.5` (GL-3.3-Core-Kontext, VSync aus), `glow 0.16` (OpenGL), `glam 0.29` (Mathematik), `png 0.17`, `bytemuck`, `anyhow`. Bewusst ohne `clap`/`image` (neueste Versionen brauchen Cargo ≥ 1.85); `unicode-segmentation` (via winit) im `Cargo.lock` auf 1.12.0 gepinnt.
+**Crates** (Rust ≥ 1.85): `winit 0.30` (Fenster/Tastatur), `glutin 0.32` + `glutin-winit 0.5` (GL-3.3-Core-Kontext, VSync aus), `glow 0.16` (OpenGL), `glam 0.29` (Mathematik), `png 0.17`, `bytemuck`, `anyhow`, `clap` (CLI), `artnet_protocol` + `socket2` (Art-Net, siehe 13.).
 
 **Shader:** die Dateien aus [shaders/](shaders/) werden per `include_str!` eingebettet → eine Quelle für Python und Rust, Binary ohne externe Shader-Dateien. Gobos zur Laufzeit aus `gobos/` (`--gobo-dir`).
 
@@ -290,11 +290,11 @@ DMX liefert nur Ziele; Motor folgt mit begrenzter Geschwindigkeit/Beschleunigung
 | [renderer.py](renderer.py) | [rust/src/renderer.rs](rust/src/renderer.rs), [rust/src/gl_util.rs](rust/src/gl_util.rs), [rust/src/resources.rs](rust/src/resources.rs) |
 | [main.py](main.py) | [rust/src/demo.rs](rust/src/demo.rs) (Bühne, Rig, `animate`, `ManualControl`), [rust/src/main.rs](rust/src/main.rs) (CLI, Event-Loop), [rust/src/window.rs](rust/src/window.rs) |
 
-**Bedienung:** `cargo run --release -- [--quality …] [--fixtures N] [--manual] [--target-fps F] [--screenshot FILE --time T]`; zusätzlich `--bench N` (N Frames ab `--time`, 30 Warm-up, t += 1/60 je Frame, glFinish → ms/Frame).
+**Bedienung:** `cargo run --release -- [--quality …] [--fixtures N] [--manual] [--target-fps F] [--screenshot FILE --time T] [--artnet [--artnet-ip IP] [--artnet-universes 0,1,…]]`; zusätzlich `--bench N` (N Frames ab `--time`, 30 Warm-up, t += 1/60 je Frame, glFinish → ms/Frame).
 
 **Abweichungen:** Dunst-Rauschen mit eigenem PRNG + periodischem separablem Gauß statt numpy-FFT (gleiche Charakteristik, nicht bit-identisch). Render-Targets in physischer Fenstergröße (Retina: mehr Pixel als unter pygame). Fenster frei skalierbar: Render-Targets und Projektion folgen der Fenstergröße.
 
-**Tests** (`cargo test`, 9): Strahlrichtung neutral, `aim_at`-Roundtrip (hängend/stehend), Prisma-Facetten (Winkel, Gewicht), dunkle Köpfe ohne Strahlen, Kegel/Quader-Winding, Atlas-Layout, Radfahrt vorwärts + Wrap, manuelles Rad ohne Volldrehung.
+**Tests** (`cargo test`, 16): Strahlrichtung neutral, `aim_at`-Roundtrip (hängend/stehend), Prisma-Facetten (Winkel, Gewicht), dunkle Köpfe ohne Strahlen, Kegel/Quader-Winding, Atlas-Layout, Radfahrt vorwärts + Wrap, manuelles Rad ohne Volldrehung; Art-Net: DMX-Puffer ohne Padding, Sequenz (verspätet verworfen, Neustart angenommen), PollReply-Gruppierung (4 Ports pro Sub-Net, Net, leerer Patch), UDP-Empfang + PollReply über Loopback; Universe-Offset (2).
 
 **Parität Bild** (Qualität low = ohne Rauschen, 1280×720, Python vs. Rust):
 

@@ -1,6 +1,9 @@
 //! Volumetric moving head demo: automatic timeline, or --manual for direct keyboard control.
 
 mod demo;
+// patch-driven parts (universe map, set_universes, dmx lookup) get their callers with MVR and the DMX resolver
+#[allow(dead_code)]
+mod dmx;
 mod fixtures;
 mod gl_util;
 mod meshes;
@@ -9,11 +12,13 @@ mod resources;
 mod window;
 
 use std::collections::HashSet;
+use std::net::Ipv4Addr;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result};
+use clap::Parser;
 use glam::Mat4;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
@@ -21,58 +26,45 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::WindowId;
 
+use dmx::artnet;
 use demo::{ManualControl, EYE, FOV, HEIGHT, PAN_SPEED, TARGET, WIDTH};
 use fixtures::Fixture;
 use renderer::Renderer;
 
-const USAGE: &str = "usage: vol_light [--quality low|medium|high] [--fixtures N] [--manual] [--target-fps F]
-                 [--screenshot FILE] [--time T] [--bench FRAMES] [--gobo-dir DIR]";
-
+/// Volumetric moving head visualizer: demo timeline, manual control, Art-Net input.
+#[derive(Parser)]
+#[command(name = "vol_light")]
 struct Args {
+    #[arg(long, default_value = "medium", value_parser = ["low", "medium", "high"])]
     quality: String,
+    /// Number of fixtures in the demo rig.
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(usize))]
     fixtures: usize,
+    /// Render one frame at --time into this PNG and exit.
+    #[arg(long)]
     screenshot: Option<PathBuf>,
+    #[arg(long, default_value_t = 18.0)]
     time: f32,
+    /// Keyboard control instead of the demo timeline.
+    #[arg(long)]
     manual: bool,
+    /// Lower the haze resolution until this frame rate is reached (0 = fixed).
+    #[arg(long, default_value_t = 60.0)]
     target_fps: f32,
+    /// Measure FRAMES frames from --time and print ms/frame.
+    #[arg(long, value_name = "FRAMES")]
     bench: Option<usize>,
+    #[arg(long, default_value = concat!(env!("CARGO_MANIFEST_DIR"), "/../gobos"))]
     gobo_dir: PathBuf,
-}
-
-fn parse_args() -> Result<Args> {
-    let mut args = Args {
-        quality: "medium".into(),
-        fixtures: 1,
-        screenshot: None,
-        time: 18.0,
-        manual: false,
-        target_fps: 60.0,
-        bench: None,
-        gobo_dir: PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../gobos")),
-    };
-    let mut it = std::env::args().skip(1);
-    while let Some(flag) = it.next() {
-        let mut value = || it.next().ok_or_else(|| anyhow!("{flag} needs a value\n{USAGE}"));
-        match flag.as_str() {
-            "--quality" => args.quality = value()?,
-            "--fixtures" => args.fixtures = value()?.parse::<usize>()?.max(1),
-            "--screenshot" => args.screenshot = Some(value()?.into()),
-            "--time" => args.time = value()?.parse()?,
-            "--manual" => args.manual = true,
-            "--target-fps" => args.target_fps = value()?.parse()?,
-            "--bench" => args.bench = Some(value()?.parse()?),
-            "--gobo-dir" => args.gobo_dir = value()?.into(),
-            "-h" | "--help" => {
-                println!("{USAGE}");
-                std::process::exit(0);
-            }
-            _ => bail!("unknown argument {flag}\n{USAGE}"),
-        }
-    }
-    if renderer::quality(&args.quality).is_none() {
-        bail!("unknown quality {}\n{USAGE}", args.quality);
-    }
-    Ok(args)
+    /// Receive Art-Net (UDP 6454) and answer ArtPoll.
+    #[arg(long)]
+    artnet: bool,
+    /// Interface address for Art-Net; 0.0.0.0 = all interfaces.
+    #[arg(long, default_value_t = Ipv4Addr::UNSPECIFIED)]
+    artnet_ip: Ipv4Addr,
+    /// Art-Net Port-Addresses announced in ArtPollReply until a patch is loaded.
+    #[arg(long, value_delimiter = ',', default_value = "0")]
+    artnet_universes: Vec<u16>,
 }
 
 fn projection((w, h): (i32, i32)) -> Mat4 {
@@ -93,7 +85,12 @@ struct Running {
     frames: u32,
     pan_offset: f32,
     tilt_offset: f32,
+    artnet: Option<artnet::Receiver>,
+    artnet_hint_shown: bool,
 }
+
+/// Art-Net is idle this long before the console gets a hint about unicast to 127.0.0.1.
+const ARTNET_HINT_AFTER: Duration = Duration::from_secs(5);
 
 struct App {
     args: Args,
@@ -144,6 +141,17 @@ impl App {
         if manual.is_some() {
             println!("{}", demo::MANUAL_HELP);
         }
+        let artnet = if self.args.artnet {
+            let receiver = artnet::Receiver::start(artnet::Config {
+                interface: self.args.artnet_ip,
+                universes: self.args.artnet_universes.clone(),
+                ..artnet::Config::default()
+            })?;
+            println!("Art-Net: listening on {}", receiver.local_addr);
+            Some(receiver)
+        } else {
+            None
+        };
         let now = Instant::now();
         self.running = Some(Running {
             win,
@@ -159,6 +167,8 @@ impl App {
             frames: 0,
             pan_offset: 0.0,
             tilt_offset: 0.0,
+            artnet,
+            artnet_hint_shown: false,
         });
         Ok(())
     }
@@ -200,8 +210,22 @@ impl App {
                 r.renderer.adapt_volume_scale(fps, args.target_fps);
             }
             let mode = r.manual.as_ref().map_or("demo".to_string(), |m| format!("MANUAL | {}", m.status()));
+            let artnet = r.artnet.as_ref().map_or(String::new(), |a| {
+                let st = a.state();
+                if st.dmx_packets == 0 && !r.artnet_hint_shown && now - r.start > ARTNET_HINT_AFTER {
+                    // unicast to 127.0.0.1 reaches only one of several programs sharing the port
+                    println!("Art-Net: no packets yet. Send as broadcast from the console, or unicast to this machine's network address.");
+                    r.artnet_hint_shown = true;
+                }
+                format!(
+                    " | Art-Net {:.0} pkt/s, {} universes, {} sources",
+                    st.dmx_rate,
+                    st.universes.len(),
+                    st.live_sources(now)
+                )
+            });
             r.win.window.set_title(&format!(
-                "Movinghead Demo | {fps:.0} FPS | {} haze {:.0}% | {} fixtures, {beams} beams | pan {:+.0}° tilt {:+.0}° | {mode}",
+                "Movinghead Demo | {fps:.0} FPS | {} haze {:.0}% | {} fixtures, {beams} beams | pan {:+.0}° tilt {:+.0}° | {mode}{artnet}",
                 args.quality,
                 r.renderer.volume_scale * 100.0,
                 r.fixtures.len(),
@@ -277,7 +301,8 @@ impl ApplicationHandler for App {
 }
 
 fn main() -> Result<()> {
-    let args = parse_args()?;
+    let mut args = Args::parse();
+    args.fixtures = args.fixtures.max(1);
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App { args, running: None, error: None };

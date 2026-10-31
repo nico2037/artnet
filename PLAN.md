@@ -1,6 +1,6 @@
 # Plan: Art-Net-Visualizer mit MVR/GDTF (Rust)
 
-Stand: 2026-10-30 · Status: geplant, nicht umgesetzt
+Stand: 2026-10-31 · Status: Phase 0 Schritt 1 und Phase 1 umgesetzt; Spike (Schritt 2) wartet auf `testdata/`
 
 Der Rust-Port in [rust/](rust/) wird zum echten Visualizer: MVR laden, GDTF auswerten, Art-Net empfangen, DMX → Attribute → Bewegungsmodell → bestehender Volumetrik-Renderer. Standard-Teile über Libraries, eigen nur, wo es nichts gibt. Demo bleibt als `--demo`.
 
@@ -39,13 +39,13 @@ Der Rust-Port in [rust/](rust/) wird zum echten Visualizer: MVR laden, GDTF ausw
 ## Phasen
 
 ### Phase 0 – Grundlage und Library-Test
-1. Rust ≥ 1.85, Abhängigkeiten anlegen; Module `app/`, `render/`, `io/{mvr, models}`, `dmx/{artnet, resolve}`, `sim/{motion, state}`, `demo.rs`
+1. Rust ≥ 1.85, Abhängigkeiten anlegen *(erledigt: Pin entfernt, `clap` für die CLI, Art-Net-Crates; `dmx/` angelegt, übrige Module entstehen mit ihrer Phase)*; Module `app/`, `render/`, `io/{mvr, models}`, `dmx/{artnet, resolve}`, `sim/{motion, state}`, `demo.rs`
 2. Spike gegen `testdata/`: `gdtf` parst alle GDTFs, `ds3`/`gltf` laden alle Modelle, `zeevonk` an 1–2 Fixtures → Entscheidung `zeevonk` vs. eigener Resolver; Ergebnis in [SPEC.md](SPEC.md)
 
-### Phase 1 – Art-Net *(parallel zu 2 und 3)*
+### Phase 1 – Art-Net *(parallel zu 2 und 3)* – umgesetzt
 3. Empfangs-Thread: UDP 6454 via `socket2` (Reuse, Broadcast, Interface wählbar), Parsing mit `artnet_protocol`, Universe-Puffer + Statistik
 4. ArtPoll → ArtPollReply (Universen aus Patch, je 4 Ports + BindIndex, Node-Name)
-5. Universe-Offset einstellbar (Default: MVR-Universe 1 = Art-Net 0)
+5. Universe-Offset einstellbar (Default: MVR-Universe 1 = Art-Net 0); `dmx::UniverseMap`, CLI/Panel folgen mit MVR-Patch
 6. `examples/artnet_send.rs` als Test-Sender
 
 ### Phase 2 – GDTF-Auswertung

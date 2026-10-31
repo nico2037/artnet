@@ -150,7 +150,7 @@ mod tests {
     #[test]
     fn prism_splits_into_deflected_facets() {
         let f = Fixture { prism: 3, prism_spread: 7.0, ..Default::default() };
-        let data = build_beam_instances(&[f.clone()]);
+        let data = build_beam_instances(std::slice::from_ref(&f));
         assert_eq!(data.len(), 3 * BEAM_FLOATS);
         for beam in data.chunks(BEAM_FLOATS) {
             let az = Vec3::new(beam[9], beam[10], beam[11]);
