@@ -1,6 +1,6 @@
 # Plan: Art-Net-Visualizer mit MVR/GDTF (Rust)
 
-Stand: 2026-10-31 · Status: Phase 0–3 umgesetzt; Phase 4 als Nächstes
+Stand: 2026-10-31 · Status: Phase 0–4 umgesetzt; Phase 5 als Nächstes
 
 Der Rust-Port in [rust/](rust/) wird zum echten Visualizer: MVR laden, GDTF auswerten, Art-Net empfangen, DMX → Attribute → Bewegungsmodell → bestehender Volumetrik-Renderer. Standard-Teile über Libraries, eigen nur, wo es nichts gibt. Demo bleibt als `--demo`.
 
@@ -58,7 +58,7 @@ Der Rust-Port in [rust/](rust/) wird zum echten Visualizer: MVR laden, GDTF ausw
 11. Koordinaten Z-up → Y-up `(x, z, −y)`, mm → m
 12. Tests: Matrix-Parsing, Adressformate, Beispiel-MVR
 
-### Phase 4 – DMX → Attribute *(braucht 0, 2, 3)*
+### Phase 4 – DMX → Attribute *(braucht 0, 2, 3)* – umgesetzt (SPEC 13.4)
 13. `dmx/resolve.rs`: Breaks, 8/16/24 Bit, aktive ChannelFunction inkl. ModeMaster, physikalischer Wert, ChannelSet → Slot, Defaults, Relations Multiply
 14. Mapping auf Zielzustand: Pan/Tilt (Invert), Dimmer, Shutter/Strobe, Farbe (RGB/W, CMY, CTO), Farbrad (Split), Gobo n (Slot, Index-Winkel oder Rotationsgeschwindigkeit), Prisma (Index/Rotation), Zoom, Focus, Iris, Frost
 15. Tests: 16 Bit, Mirroring, Funktionswahl, Wheel-Sets, ModeMaster

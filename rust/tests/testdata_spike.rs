@@ -259,3 +259,73 @@ fn loose_gdtfs_build_with_gobo_images() {
     }
     println!("gobo library: {} distinct images", gobos.layers.len());
 }
+
+#[test]
+fn megapointe_dmx_resolves_like_its_manual() {
+    use vol_light::dmx::resolve::{Profile, Shutter};
+    use vol_light::fixture_type::{FixtureType, GoboLibrary};
+    let Some(path) = files("mvr").into_iter().find(|p| p.ends_with("basic_gdtf.mvr")) else {
+        println!("basic_gdtf.mvr not fetched, skipped");
+        return;
+    };
+    let scene = mvr::Scene::load(&path).unwrap();
+    let fixture = &scene.fixtures[0];
+    let mut file = gdtf_io::load(scene.gdtf_bytes(fixture).unwrap().to_vec()).unwrap();
+    let mode = "Mode 1 - Standard 16 - bit";
+    let ft = FixtureType::from_gdtf(&mut file, mode, &mut GoboLibrary::default()).unwrap();
+    let profile = Profile::from_gdtf(&file, mode, &ft).unwrap();
+    assert_eq!(profile.channels.iter().map(|c| c.offsets.len()).sum::<usize>(), 39);
+
+    let at = [mvr::Address { dmx_break: 0, universe: 1, channel: 1 }];
+    let run = |values: &[(usize, u8)]| {
+        let mut data = [0u8; 512];
+        for &(ch, v) in values {
+            data[ch - 1] = v;
+        }
+        profile.resolve(&profile.read(&at, |u| (u == 1).then_some(&data)), false, false)
+    };
+    let wheel_name = |w: Option<usize>| w.map(|w| ft.wheels[w].name.as_str());
+
+    // pan/tilt centre, full dimmer, shutter open, gobo 2 slot 2 indexed to +180°, prism 1 in
+    let t = run(&[(1, 128), (3, 128), (38, 255), (39, 255), (37, 100), (20, 5), (21, 255), (22, 255), (23, 5)]);
+    assert!(t.pan.abs() < 0.01 && t.tilt.abs() < 0.01, "{} {}", t.pan, t.tilt);
+    assert_eq!((t.pan_range, t.pan_timing.fade), (540.0, 3.134));
+    assert_eq!(t.dimmer, 1.0);
+    assert_eq!(t.shutter, Shutter::Open);
+    let gobo2 = t.gobos.iter().find(|g| g.number == 2).unwrap();
+    assert_eq!((wheel_name(gobo2.wheel), gobo2.slot, gobo2.index, gobo2.rotation), (Some("RotatingGoboWheel"), 2, 180.0, None));
+    let prism = &t.prisms[0];
+    assert_eq!((wheel_name(prism.wheel), prism.slot), (Some("PrismWheel1"), 2));
+    assert!(!ft.wheels[prism.wheel.unwrap()].slots[1].facets.is_empty());
+    // Gobo2 > 0 selects the second zoom range (42°…3°), DMX 0 = widest
+    assert_eq!(t.zoom, Some(42.0));
+
+    // rotating gobo range turns the index channel into rotation speed; strobe range
+    let t = run(&[(20, 35), (21, 255), (22, 255), (37, 255)]);
+    let gobo2 = t.gobos.iter().find(|g| g.number == 2).unwrap();
+    assert_eq!((gobo2.slot, gobo2.rotation), (3, Some(56.63)));
+    assert!(matches!(t.shutter, Shutter::Strobe { random: false, .. } | Shutter::Open));
+    let t = run(&[(37, 70)]);
+    assert!(matches!(t.shutter, Shutter::Strobe { hz, random: false } if hz > 0.3 && hz < 20.0), "{:?}", t.shutter);
+    // gobo 2 open (DMX 0) selects the narrow zoom range
+    assert_eq!(run(&[]).zoom, Some(21.0));
+    // full cyan
+    assert_eq!(run(&[(7, 255)]).color, glam::Vec3::new(0.0, 1.0, 1.0));
+}
+
+#[test]
+fn every_profile_resolves_defaults() {
+    use vol_light::dmx::resolve::Profile;
+    use vol_light::fixture_type::{FixtureType, GoboLibrary};
+    for path in files("mvr") {
+        let scene = mvr::Scene::load(&path).unwrap();
+        for f in &scene.fixtures {
+            let mut file = gdtf_io::load(scene.gdtf_bytes(f).unwrap().to_vec()).unwrap();
+            let ft = FixtureType::from_gdtf(&mut file, &f.gdtf_mode, &mut GoboLibrary::default()).unwrap();
+            let profile = Profile::from_gdtf(&file, &f.gdtf_mode, &ft).unwrap();
+            let raw = profile.read(&f.addresses, |_| None);
+            let t = profile.resolve(&raw, f.invert_pan, f.invert_tilt);
+            assert!(t.dimmer.is_finite() && t.pan.is_finite() && t.tilt.is_finite());
+        }
+    }
+}

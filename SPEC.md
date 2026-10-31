@@ -294,7 +294,7 @@ DMX liefert nur Ziele; Motor folgt mit begrenzter Geschwindigkeit/Beschleunigung
 
 **Abweichungen:** Dunst-Rauschen mit eigenem PRNG + periodischem separablem Gauß statt numpy-FFT (gleiche Charakteristik, nicht bit-identisch). Render-Targets in physischer Fenstergröße (Retina: mehr Pixel als unter pygame). Fenster frei skalierbar: Render-Targets und Projektion folgen der Fenstergröße.
 
-**Tests** (`cargo test`, 27 + 5): Strahlrichtung neutral, `aim_at`-Roundtrip (hängend/stehend), Prisma-Facetten (Winkel, Gewicht), dunkle Köpfe ohne Strahlen, Kegel/Quader-Winding, Atlas-Layout, Radfahrt vorwärts + Wrap, manuelles Rad ohne Volldrehung; Art-Net: DMX-Puffer ohne Padding, Sequenz (verspätet verworfen, Neustart angenommen), PollReply-Gruppierung (4 Ports pro Sub-Net, Net, leerer Patch), UDP-Empfang + PollReply über Loopback; Universe-Offset (2); MVR: Adressen, Matrix, Z-up → Y-up, Szene mit Gruppen/Symbolen, GDTF-Auflösung, unbekannter Symdef; GDTF: Highlight-Ergänzung (2); Fixture-Typ: CIE → RGB, GDTF-Matrix, Gobo-Dedupe. Integrationstests (5) `tests/testdata_spike.rs` gegen `testdata/`.
+**Tests** (`cargo test`, 35 + 7): Strahlrichtung neutral, `aim_at`-Roundtrip (hängend/stehend), Prisma-Facetten (Winkel, Gewicht), dunkle Köpfe ohne Strahlen, Kegel/Quader-Winding, Atlas-Layout, Radfahrt vorwärts + Wrap, manuelles Rad ohne Volldrehung; Art-Net: DMX-Puffer ohne Padding, Sequenz (verspätet verworfen, Neustart angenommen), PollReply-Gruppierung (4 Ports pro Sub-Net, Net, leerer Patch), UDP-Empfang + PollReply über Loopback; Universe-Offset (2); MVR: Adressen, Matrix, Z-up → Y-up, Szene mit Gruppen/Symbolen, GDTF-Auflösung, unbekannter Symdef; GDTF: Highlight-Ergänzung (2); Fixture-Typ: CIE → RGB, GDTF-Matrix, Gobo-Dedupe; Resolver: DMXValue, Attributnamen, 16 Bit, Wheel-Sets, ModeMaster, Strobe-Bereich, CMY, Defaults, Invert über Universe-Grenze, Multiply. Integrationstests (7, u. a. MegaPointe gegen ihre DMX-Tabelle) `tests/testdata_spike.rs` gegen `testdata/`.
 
 **Parität Bild** (Qualität low = ohne Rauschen, 1280×720, Python vs. Rust):
 
@@ -320,7 +320,7 @@ GPU-gebunden → praktisch gleich. Der Rust-Vorteil liegt bei CPU-Arbeit (Art-Ne
 
 ## 13. Geplant: Art-Net-Visualizer mit MVR/GDTF
 
-Status: Art-Net-Empfang (Phase 1), Library-Spike (Phase 0), GDTF-Auswertung (Phase 2) und MVR-Reader (Phase 3) umgesetzt; DMX → Attribute (Phase 4) folgt. Ablauf und Phasen in [PLAN.md](PLAN.md).
+Status: Art-Net-Empfang (Phase 1), Library-Spike (Phase 0), GDTF-Auswertung (Phase 2), MVR-Reader (Phase 3) und DMX → Attribute (Phase 4) umgesetzt; Bewegungsmodell (Phase 5) folgt. Ablauf und Phasen in [PLAN.md](PLAN.md).
 
 **Ziel:** Der Rust-Port wird zum Visualizer für echte Pulte (ChamSys MagicQ, grandMA, Eigenentwicklung). Rig und Patch kommen aus einer MVR-Datei, das Verhalten jedes Scheinwerfers aus seiner GDTF, die Werte per Art-Net.
 
@@ -347,7 +347,7 @@ flowchart LR
 |---|---|
 | Art-Net-Pakete | `artnet_protocol` + `socket2` (Port 6454 teilen, Broadcast) |
 | GDTF lesen | `gdtf` (Objektmodell + Ressourcen), über `io::gdtf::load` (ergänzt fehlendes `Highlight`) |
-| DMX → Attribut | eigener Resolver (`zeevonk` verworfen, siehe Spike) |
+| DMX → Attribut | eigener Resolver `dmx::resolve` (`zeevonk` verworfen, siehe Spike) |
 | MVR | eigener Parser auf `zip` + `roxmltree` |
 | 3D-Modelle | `ds3` (3DS), `gltf` (GLB) |
 | UI | `egui` + `egui-winit` + `egui_glow` |
@@ -403,3 +403,15 @@ Weitere Befunde aus den Testdaten:
 - **Räder**: Slots mit Farbe (CIE xyY → lineares sRGB, Y = Transmission), Gobo-Bild als Layer in der `GoboLibrary` (Transmission = Alpha × Helligkeit, 256², identische Bilder einmal), Prisma-Facetten (Farbe + 2D-Affin 3×3). Filter-Slots (`Filter=`) vorerst klar.
 - **Modelle**: Datei + Maße (L×B×H); Laden und Skalieren der Meshes folgt mit dem Renderer (Phase 6), ebenso Upload der GoboLibrary als Texture-Array mit Prüfung gegen `GL_MAX_ARRAY_TEXTURE_LAYERS`.
 - Fehlende Rad-Bilder zählen in `missing_media`, der Slot bleibt offen.
+
+### 13.4 DMX → Attribute ([rust/src/dmx/resolve.rs](rust/src/dmx/resolve.rs))
+
+`Profile::from_gdtf(file, mode, fixture_type)` flacht den Modus einmal ab: Kanäle (Break, Offsets MSB zuerst, Default der InitialFunction) mit ChannelFunctions (Attribut → `Feature`, DMXFrom, Physical-Bereich, RealFade/-Acceleration, Rad, ModeMaster, ChannelSets mit Slot, Relation Multiply). Pro Frame:
+1. `read(addresses, dmx)`: Rohwerte je Kanal aus den Universen; Footprint darf ins nächste Universe laufen; ohne Daten bleibt der Default.
+2. `resolve(raw, invert_pan, invert_tilt)` → `Target`: Invert auf Rohwert; aktive Funktion = größtes DMXFrom ≤ Wert unter den Funktionen, deren ModeMaster-Bedingung gilt; physikalischer Wert linear bis zum Beginn der nächsten Funktion; ChannelSet → Slot.
+
+**DMXValue** `n/b` in einen Kanal mit k Bytes: ohne `s` Byte-Mirroring (255/1 → 65535/2), mit `s` Shift (255/1s → 65280/2), mehr Bytes → abschneiden.
+
+**Abbildung:** Pan/Tilt (Grad, Bereich und Timing für das Bewegungsmodell), Dimmer, Shutter (offen/zu/Strobe Hz, Random, Pulse), ColorAdd R/G/B/W/A, ColorSub C/M/Y, CTO, `Color{n}`/`Gobo{n}`/`Prism{n}` als Rad-Ziel (Slot, Index-Winkel `…Pos`, Rotation `…PosRotate`, Radrotation `…WheelSpin`), Zoom (Grad), Focus, Iris, Frost (anteilig 0..1). Alles andere (Steuerkanäle, Effektrad, Shaper, Animationsrad) wird ignoriert.
+
+**Befunde:** `gdtf` speichert `WheelSlotIndex` 0-basiert (GDTF 1 = erster Slot). MegaPointe nutzt ModeMaster auch für den Zoom (zwei Bereiche je nach Gobo 2).

@@ -1,6 +1,7 @@
-//! DMX input: Art-Net reception and universe numbering. Resolving DMX to fixture attributes follows in `resolve`.
+//! DMX input: Art-Net reception, universe numbering, DMX → fixture attributes (`resolve`).
 
 pub mod artnet;
+pub mod resolve;
 
 /// Universe numbering between MVR (1-based, `Addresses/Address`) and Art-Net (15-bit Port-Address, 0-based).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
