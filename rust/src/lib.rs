@@ -9,4 +9,5 @@ pub mod io;
 pub mod meshes;
 pub mod renderer;
 pub mod resources;
+pub mod sim;
 pub mod window;

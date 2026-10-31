@@ -1,6 +1,6 @@
 # Plan: Art-Net-Visualizer mit MVR/GDTF (Rust)
 
-Stand: 2026-10-31 · Status: Phase 0–4 umgesetzt; Phase 5 als Nächstes
+Stand: 2026-10-31 · Status: Phase 0–5 umgesetzt; Phase 6 als Nächstes
 
 Der Rust-Port in [rust/](rust/) wird zum echten Visualizer: MVR laden, GDTF auswerten, Art-Net empfangen, DMX → Attribute → Bewegungsmodell → bestehender Volumetrik-Renderer. Standard-Teile über Libraries, eigen nur, wo es nichts gibt. Demo bleibt als `--demo`.
 
@@ -63,7 +63,7 @@ Der Rust-Port in [rust/](rust/) wird zum echten Visualizer: MVR laden, GDTF ausw
 14. Mapping auf Zielzustand: Pan/Tilt (Invert), Dimmer, Shutter/Strobe, Farbe (RGB/W, CMY, CTO), Farbrad (Split), Gobo n (Slot, Index-Winkel oder Rotationsgeschwindigkeit), Prisma (Index/Rotation), Zoom, Focus, Iris, Frost
 15. Tests: 16 Bit, Mirroring, Funktionswahl, Wheel-Sets, ModeMaster
 
-### Phase 5 – Simulation
+### Phase 5 – Simulation – umgesetzt (SPEC 13.5; Speed-Kanal und Lampenträgheit offen)
 16. `sim/motion.rs`: Ziel → Ist mit `v_max = Bereich / RealFade`, `a_max = v_max / RealAcceleration`; Defaults Pan 540° / 2,5 s, Tilt 270° / 1,8 s, Beschleunigung 0,3 s; Radfahrt, Rotationsintegration, Strobe, DMX-Glättung; Tests
 
 ### Phase 6 – Renderer *(braucht 2, 3, 5)*

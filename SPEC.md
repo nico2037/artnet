@@ -294,7 +294,7 @@ DMX liefert nur Ziele; Motor folgt mit begrenzter Geschwindigkeit/Beschleunigung
 
 **Abweichungen:** Dunst-Rauschen mit eigenem PRNG + periodischem separablem Gauß statt numpy-FFT (gleiche Charakteristik, nicht bit-identisch). Render-Targets in physischer Fenstergröße (Retina: mehr Pixel als unter pygame). Fenster frei skalierbar: Render-Targets und Projektion folgen der Fenstergröße.
 
-**Tests** (`cargo test`, 35 + 7): Strahlrichtung neutral, `aim_at`-Roundtrip (hängend/stehend), Prisma-Facetten (Winkel, Gewicht), dunkle Köpfe ohne Strahlen, Kegel/Quader-Winding, Atlas-Layout, Radfahrt vorwärts + Wrap, manuelles Rad ohne Volldrehung; Art-Net: DMX-Puffer ohne Padding, Sequenz (verspätet verworfen, Neustart angenommen), PollReply-Gruppierung (4 Ports pro Sub-Net, Net, leerer Patch), UDP-Empfang + PollReply über Loopback; Universe-Offset (2); MVR: Adressen, Matrix, Z-up → Y-up, Szene mit Gruppen/Symbolen, GDTF-Auflösung, unbekannter Symdef; GDTF: Highlight-Ergänzung (2); Fixture-Typ: CIE → RGB, GDTF-Matrix, Gobo-Dedupe; Resolver: DMXValue, Attributnamen, 16 Bit, Wheel-Sets, ModeMaster, Strobe-Bereich, CMY, Defaults, Invert über Universe-Grenze, Multiply. Integrationstests (7, u. a. MegaPointe gegen ihre DMX-Tabelle) `tests/testdata_spike.rs` gegen `testdata/`.
+**Tests** (`cargo test`, 42 + 8): Strahlrichtung neutral, `aim_at`-Roundtrip (hängend/stehend), Prisma-Facetten (Winkel, Gewicht), dunkle Köpfe ohne Strahlen, Kegel/Quader-Winding, Atlas-Layout, Radfahrt vorwärts + Wrap, manuelles Rad ohne Volldrehung; Art-Net: DMX-Puffer ohne Padding, Sequenz (verspätet verworfen, Neustart angenommen), PollReply-Gruppierung (4 Ports pro Sub-Net, Net, leerer Patch), UDP-Empfang + PollReply über Loopback; Universe-Offset (2); MVR: Adressen, Matrix, Z-up → Y-up, Szene mit Gruppen/Symbolen, GDTF-Auflösung, unbekannter Symdef; GDTF: Highlight-Ergänzung (2); Fixture-Typ: CIE → RGB, GDTF-Matrix, Gobo-Dedupe; Resolver: DMXValue, Attributnamen, 16 Bit, Wheel-Sets, ModeMaster, Strobe-Bereich, CMY, Defaults, Invert über Universe-Grenze, Multiply. Bewegung: Achse ohne Überschwingen, kurze Wege, RealFade, Rad-Kurzweg, Spin/Rotation, Strobe, Glättung. Integrationstests (8, u. a. MegaPointe gegen ihre DMX-Tabelle, Pipeline Art-Net → Ist-Wert) `tests/testdata_spike.rs` gegen `testdata/`.
 
 **Parität Bild** (Qualität low = ohne Rauschen, 1280×720, Python vs. Rust):
 
@@ -320,7 +320,7 @@ GPU-gebunden → praktisch gleich. Der Rust-Vorteil liegt bei CPU-Arbeit (Art-Ne
 
 ## 13. Geplant: Art-Net-Visualizer mit MVR/GDTF
 
-Status: Art-Net-Empfang (Phase 1), Library-Spike (Phase 0), GDTF-Auswertung (Phase 2), MVR-Reader (Phase 3) und DMX → Attribute (Phase 4) umgesetzt; Bewegungsmodell (Phase 5) folgt. Ablauf und Phasen in [PLAN.md](PLAN.md).
+Status: Art-Net-Empfang (Phase 1), Library-Spike (Phase 0), GDTF-Auswertung (Phase 2), MVR-Reader (Phase 3), DMX → Attribute (Phase 4) und Bewegungsmodell (Phase 5) umgesetzt; Renderer-Anbindung (Phase 6) folgt. Ablauf und Phasen in [PLAN.md](PLAN.md).
 
 **Ziel:** Der Rust-Port wird zum Visualizer für echte Pulte (ChamSys MagicQ, grandMA, Eigenentwicklung). Rig und Patch kommen aus einer MVR-Datei, das Verhalten jedes Scheinwerfers aus seiner GDTF, die Werte per Art-Net.
 
@@ -415,3 +415,14 @@ Weitere Befunde aus den Testdaten:
 **Abbildung:** Pan/Tilt (Grad, Bereich und Timing für das Bewegungsmodell), Dimmer, Shutter (offen/zu/Strobe Hz, Random, Pulse), ColorAdd R/G/B/W/A, ColorSub C/M/Y, CTO, `Color{n}`/`Gobo{n}`/`Prism{n}` als Rad-Ziel (Slot, Index-Winkel `…Pos`, Rotation `…PosRotate`, Radrotation `…WheelSpin`), Zoom (Grad), Focus, Iris, Frost (anteilig 0..1). Alles andere (Steuerkanäle, Effektrad, Shaper, Animationsrad) wird ignoriert.
 
 **Befunde:** `gdtf` speichert `WheelSlotIndex` 0-basiert (GDTF 1 = erster Slot). MegaPointe nutzt ModeMaster auch für den Zoom (zwei Bereiche je nach Gobo 2).
+
+### 13.5 Bewegungsmodell ([rust/src/sim/motion.rs](rust/src/sim/motion.rs))
+
+`Motion::new(target)` startet in Ruhe am Ziel; `Motion::step(target, fixture_type, dt)` → `Actual` (Ist-Zustand für den Renderer):
+- **Pan/Tilt** je eine `Axis`: `v_max = Bereich / RealFade`, `a_max = v_max / RealAcceleration`; Defaults Pan 540°/2,5 s, Tilt 270°/1,8 s, Beschleunigung 0,3 s. Bremsgeschwindigkeit in diskreter Form `−a·dt/2 + sqrt((a·dt/2)² + 2·a·|err|)`, damit das Ziel ohne Überschwingen und ohne Kriechen erreicht wird.
+- **Räder**: Slot-Fahrt 0,35 s pro Slot auf dem kürzeren Weg, `WheelSpin` dreht das Rad (°/s → Slots/s), `PosRotate` dreht den Slot, Index fährt mit 360°/s auf dem kürzeren Weg.
+- **Strobe**: Tor mit 25 % Öffnungszeit pro Periode; Random variiert jede Periode zwischen 0,5- und 1,5-facher Rate.
+- **Glättung**: Dimmer, Farbe, Zoom, Focus, Iris, Frost mit Tiefpass τ = 30 ms gegen DMX-Stufen.
+- Noch nicht: Pan/Tilt-Speed-Kanal (`PositionMSpeed`), Lampenträgheit (Halogen/Entladung).
+
+MegaPointe (RealFade 3,134 s, RealAcceleration 0,549 s): 270° Pan in 2,08 s, erwartet 270/(540/3,134) + 0,549 = 2,12 s (`tests/pipeline.rs`, Art-Net über Loopback bis zum Ist-Wert).
