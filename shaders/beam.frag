@@ -22,14 +22,14 @@ void main() {
     vec3 P = worldFromDepth(uv, depth);
     vec3 l = transpose(v_basis) * (P - v_apex);
     if (l.z > v_cone.y) discard;
-    float m = beamMask(l, v_cone.x, v_cone.z, v_shadow.w);
-    if (m <= 0.0) discard;
+    LIGHT m = beamMask(l, v_cone.x, v_cone.z, v_shadow.w);
+    if (LIGHT_PEAK(m) <= 0.0) discard;
 
     vec3 N = texture(u_normal, uv).xyz;
     vec3 toLight = v_apex - P;
     float d2 = dot(toLight, toLight);
     m *= shadow(P + N * (0.02 + 0.01 * sqrt(d2)), v_shadow);
-    if (m <= 0.0) discard;
+    if (LIGHT_PEAK(m) <= 0.0) discard;
     float ndl = max(dot(N, toLight * inversesqrt(d2)), 0.0);
     vec3 albedo = texture(u_albedo, uv).rgb;
     o_color = vec4(v_color * albedo * (m * ndl * u_gain / d2), 1.0);
@@ -73,15 +73,15 @@ void main() {
 
     float dt = (seg.y - seg.x) / float(u_steps);
     float jitter = ign(gl_FragCoord.xy);
-    float sum = 0.0;
+    LIGHT sum = LIGHT(0.0);
     for (int i = 0; i < u_steps; ++i) {
         float t = seg.x + (float(i) + jitter) * dt;
         vec3 l = o + d * t;
-        float m = beamMask(l, v_cone.x, v_cone.z, v_shadow.w);
-        if (m <= 0.0) continue;
+        LIGHT m = beamMask(l, v_cone.x, v_cone.z, v_shadow.w);
+        if (LIGHT_PEAK(m) <= 0.0) continue;
         vec3 p = u_cam_pos + rd * t;
         m *= shadow(p, v_shadow);
-        if (m <= 0.0) continue;
+        if (LIGHT_PEAK(m) <= 0.0) continue;
         float dist2 = dot(l, l);
         float phase = henyeyGreenstein(dot(l, -d) * inversesqrt(dist2), u_g);
         sum += m * phase * hazeDensity(p) / (dist2 + 0.3);

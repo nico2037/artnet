@@ -4,6 +4,11 @@ flat in vec3 v_wheel2;
 flat in vec2 v_range1;
 flat in vec2 v_range2;
 flat in float v_aperture;     // iris radius in aperture radii; the cone is narrowed to match
+#ifdef COLOR_IMAGE
+flat in vec3 v_color1;
+flat in vec3 v_color2;
+flat in float v_split;
+#endif
 
 uniform sampler2DArray u_gobos;
 uniform float u_wheel_slots;  // open slot + one per gobo layer
@@ -41,5 +46,12 @@ float goboWheel(vec2 uv, vec3 wheel, vec2 range) {
 
 void main() {
     vec2 uv = v_uv * v_aperture;
-    o_light = vec4(goboWheel(uv, v_wheel1, v_range1) * goboWheel(uv, v_wheel2, v_range2));
+    float t = goboWheel(uv, v_wheel1, v_range1) * goboWheel(uv, v_wheel2, v_range2);
+#ifdef COLOR_IMAGE
+    // colour slots sit edge to edge at the gobo slot pitch; mid-scroll the edge crosses the aperture
+    vec3 filt = uv.x + v_split * SLOT_PITCH > 0.5 * SLOT_PITCH ? v_color2 : v_color1;
+    o_light = vec4(t * filt, 1.0);
+#else
+    o_light = vec4(t);
+#endif
 }

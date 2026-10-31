@@ -10,6 +10,7 @@ fn shader_file(name: &str) -> &'static str {
         "scene.vert" => include_str!("../../shaders/scene.vert"),
         "scene.frag" => include_str!("../../shaders/scene.frag"),
         "fixture.vert" => include_str!("../../shaders/fixture.vert"),
+        "model.vert" => include_str!("../../shaders/model.vert"),
         "beam.vert" => include_str!("../../shaders/beam.vert"),
         "beam.frag" => include_str!("../../shaders/beam.frag"),
         "fullscreen.vert" => include_str!("../../shaders/fullscreen.vert"),
@@ -137,7 +138,6 @@ pub struct TexFormat {
 pub const RGBA8: TexFormat = TexFormat { internal: glow::RGBA8, format: glow::RGBA, ty: glow::UNSIGNED_BYTE };
 pub const RGBA16F: TexFormat = TexFormat { internal: glow::RGBA16F, format: glow::RGBA, ty: glow::FLOAT };
 pub const R16F: TexFormat = TexFormat { internal: glow::R16F, format: glow::RED, ty: glow::FLOAT };
-pub const R8: TexFormat = TexFormat { internal: glow::R8, format: glow::RED, ty: glow::UNSIGNED_BYTE };
 pub const DEPTH24: TexFormat =
     TexFormat { internal: glow::DEPTH_COMPONENT24, format: glow::DEPTH_COMPONENT, ty: glow::UNSIGNED_INT };
 

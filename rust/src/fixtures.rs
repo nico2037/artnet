@@ -9,7 +9,16 @@ pub const LENS_OFFSET: f32 = 0.14;
 pub const BEAM_LENGTH: f32 = 40.0;
 pub const BEAM_FLOATS: usize = 22; // apex 3, basis 9, cone 3 (tan half angle, length, focus), color 3, shadow origin 3 + slot 1
 pub const BODY_FLOATS: usize = 33; // pos 3, mount 9, pan 9, beam 9, lens color 3
-pub const LIGHT_FLOATS: usize = 12; // slot 1, wheel 1 (pos, rot, blur) 3, wheel 2 3, layer range 1 2, range 2 2, iris 1
+pub const MODEL_FLOATS: usize = 15; // world columns 3×3, translation 3, emissive 3
+
+/// One GDTF model part placed in the world (see `Renderer::set_models`).
+#[derive(Clone, Copy, Debug)]
+pub struct ModelInstance {
+    pub mesh: u32,
+    pub world: glam::Mat4,
+    pub emissive: Vec3,
+}
+pub const LIGHT_FLOATS: usize = 19; // slot 1, wheels 3 + 3, layer ranges 2 + 2, iris 1, colour split 3 + 3 + 1
 pub const WHEEL_PLANES: [f32; 2] = [0.0, 0.3]; // focus value at which each gobo wheel is sharp
 pub const FOCUS_BLUR: f32 = 8.0; // mip levels of blur per unit of defocus
 
@@ -46,6 +55,10 @@ pub struct Fixture {
     pub gobo2_range: Option<(u32, u32)>,
     /// Closed fraction of the iris (0 = open). The cone angle shrinks with it; the light image is cropped.
     pub iris: f32,
+    /// Colour wheel between two slots: (current slot colour, next slot colour, scroll fraction 0..1).
+    pub color_split: Option<(Vec3, Vec3, f32)>,
+    /// Drawn by its GDTF models instead of the generic body.
+    pub custom_body: bool,
     pub pose: Option<Pose>,
 }
 
@@ -70,6 +83,8 @@ impl Default for Fixture {
             gobo_range: None,
             gobo2_range: None,
             iris: 0.0,
+            custom_body: false,
+            color_split: None,
             pose: None,
         }
     }
@@ -96,7 +111,7 @@ pub fn aim_at(f: &Fixture, target: Vec3) -> (f32, f32) {
 
 pub fn build_body_instances(fixtures: &[Fixture]) -> Vec<f32> {
     let mut out = Vec::with_capacity(fixtures.len() * BODY_FLOATS);
-    for f in fixtures {
+    for f in fixtures.iter().filter(|f| !f.custom_body) {
         let (mount, pan_frame, beam) = frames(f);
         out.extend(f.pos.to_array());
         out.extend(mount.to_cols_array());
@@ -120,6 +135,10 @@ pub fn build_light_instances(fixtures: &[Fixture]) -> Vec<f32> {
         out.extend(range(f.gobo_range));
         out.extend(range(f.gobo2_range));
         out.push(f.iris);
+        let (c1, c2, split) = f.color_split.unwrap_or((Vec3::ONE, Vec3::ONE, 0.0));
+        out.extend(c1.to_array());
+        out.extend(c2.to_array());
+        out.push(split);
     }
     out
 }

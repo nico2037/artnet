@@ -4,15 +4,15 @@
 use std::collections::HashMap;
 use std::f32::consts::PI;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use glam::{Mat3, Mat4, Vec3};
 
 use crate::dmx::resolve::{Feature, Profile, Target};
 use crate::fixture_type::{Beam, BeamKind, FixtureType, GoboLibrary};
-use crate::fixtures::{Fixture, Pose};
+use crate::fixtures::{Fixture, ModelInstance, Pose};
 use crate::io::mvr::{self, MeshInstance, Scene};
 use crate::io::gdtf;
-use crate::meshes::{interleave, Mesh};
+use crate::meshes::{self, interleave, interleave_flat, Mesh};
 use crate::sim::motion::{Actual, Motion, WheelState};
 
 pub struct FixtureKind {
@@ -37,7 +37,14 @@ pub struct Rig {
     pub skipped: Vec<String>,
     /// Fixture types loaded with a substitute, e.g. a default beam for GDTFs without beam geometry.
     pub notes: Vec<String>,
+    /// GDTF model meshes for the renderer (pos 3, normal 3), indexed by mesh id.
+    pub meshes: Vec<Vec<f32>>,
+    /// Mesh id per kind and model index.
+    mesh_ids: Vec<Vec<Option<u32>>>,
 }
+
+/// Lens glow of the beam part's model, as the generic body's lens.
+const LENS_GLOW: f32 = 25.0;
 
 /// Placeholder GDTFs (e.g. exported by visualisers) often have a dimmer but no beam geometry;
 /// they get a generic spot from their root part so the patch still shows light.
@@ -68,6 +75,9 @@ impl Rig {
                         let mut ty = FixtureType::from_gdtf(&mut file, &f.gdtf_mode, &mut gobos)?;
                         let profile = Profile::from_gdtf(&file, &f.gdtf_mode, &ty)?;
                         let has_dimmer = profile.channels.iter().flat_map(|c| &c.functions).any(|f| f.feature == Feature::Dimmer);
+                        if ty.missing_models > 0 {
+                            notes.push(format!("{}: {} model files missing, drawn as boxes", f.gdtf_spec, ty.missing_models));
+                        }
                         if ty.beam.is_none() && has_dimmer && !ty.parts.is_empty() {
                             ty.beam = Some(FALLBACK_BEAM);
                             notes.push(format!("{}: no beam geometry, using a {}° spot", f.gdtf_spec, FALLBACK_BEAM.beam_angle));
@@ -91,7 +101,23 @@ impl Rig {
                 Err(e) => skipped.push(format!("{} ({}): {e}", f.name, f.fixture_id)),
             }
         }
-        Self { fixtures, kinds, gobos, skipped, notes }
+        let mut meshes = Vec::new();
+        let mesh_ids = kinds
+            .iter()
+            .map(|k: &FixtureKind| {
+                k.ty.models
+                    .iter()
+                    .map(|m| {
+                        let tris = m.mesh.as_ref().filter(|t| !t.is_empty())?;
+                        let mut data = Vec::new();
+                        interleave_flat(tris, &mut data);
+                        meshes.push(data);
+                        Some(meshes.len() as u32 - 1)
+                    })
+                    .collect()
+            })
+            .collect();
+        Self { fixtures, kinds, gobos, skipped, notes, meshes, mesh_ids }
     }
 
     /// MVR universes the patch uses (1-based).
@@ -112,6 +138,27 @@ impl Rig {
         }
     }
 
+    /// World-placed model parts of all fixtures whose type has models.
+    pub fn model_instances(&self) -> Vec<ModelInstance> {
+        let mut out = Vec::new();
+        for f in &self.fixtures {
+            let ty = &self.kinds[f.kind].ty;
+            let ids = &self.mesh_ids[f.kind];
+            if ids.iter().all(Option::is_none) {
+                continue;
+            }
+            let (pan, tilt) = f.actual.as_ref().map_or((f.target.pan, f.target.tilt), |a| (a.pan, a.tilt));
+            let worlds = part_worlds(ty, f.mvr.transform, pan, tilt);
+            let glow = f.actual.as_ref().map_or(Vec3::ZERO, |a| a.color * a.intensity * LENS_GLOW);
+            for (i, part) in ty.parts.iter().enumerate() {
+                let Some(mesh) = part.model.and_then(|m| ids[m]) else { continue };
+                let lens = ty.beam.is_some_and(|b| b.part == i);
+                out.push(ModelInstance { mesh, world: worlds[i], emissive: if lens { glow } else { Vec3::ZERO } });
+            }
+        }
+        out
+    }
+
     pub fn render_fixtures(&self) -> Vec<Fixture> {
         self.fixtures.iter().map(|f| self.render_fixture(f)).collect()
     }
@@ -125,7 +172,8 @@ impl Rig {
         let wash = beam.is_some_and(|b| b.kind != BeamKind::Spot);
         let default_angle = beam.map_or(25.0, |b| b.beam_angle.max(1.0));
 
-        let mut out = Fixture { pos: pivot, pose: Some(pose), ..Fixture::default() };
+        let custom_body = self.mesh_ids[f.kind].iter().any(Option::is_some);
+        let mut out = Fixture { pos: pivot, pose: Some(pose), custom_body, ..Fixture::default() };
         let Some(a) = a else {
             out.dimmer = 0.0;
             return out;
@@ -141,9 +189,18 @@ impl Rig {
         // the renderer's focus sets edge softness and gobo blur; frost and wash optics soften both
         out.focus = if wash { 1.0 } else { (a.focus + a.frost).min(1.0) };
 
+        // the first colour wheel goes into the light image (split while scrolling), further ones tint the beam
         let mut color = a.color;
-        for w in &a.color_wheels {
-            if let Some(slot) = w.wheel.and_then(|i| ty.wheels.get(i)).and_then(|wheel| slot_at(wheel.slots.len(), w)).and_then(|s| ty.wheels[w.wheel.unwrap()].slots.get(s)) {
+        let mut wheels = a.color_wheels.iter().filter_map(|w| Some((w, ty.wheels.get(w.wheel?)?))).filter(|(_, wh)| !wh.slots.is_empty());
+        if let Some((w, wheel)) = wheels.next() {
+            let n = wheel.slots.len() as f32;
+            let p = (w.position - 1.0).rem_euclid(n);
+            let k = p.floor();
+            let colour = |i: f32| wheel.slots[(i.rem_euclid(n)) as usize].color;
+            out.color_split = Some((colour(k), colour(k + 1.0), p - k));
+        }
+        for (w, wheel) in wheels {
+            if let Some(slot) = slot_at(wheel.slots.len(), w).and_then(|s| wheel.slots.get(s)) {
                 color *= slot.color;
             }
         }
@@ -186,19 +243,7 @@ fn slot_at(slots: usize, w: &WheelState) -> Option<usize> {
 /// Kinematics from the GDTF geometry chain: pan rotates its axis part about local Z, tilt about local X.
 /// Returns the renderer pose and the tilt pivot (shadow origin, fixed while moving).
 pub fn pose(ty: &FixtureType, mvr_transform: Mat4, pan: f32, tilt: f32) -> (Pose, Vec3) {
-    let root = mvr_transform * gdtf_to_local();
-    let mut world = vec![Mat4::IDENTITY; ty.parts.len()];
-    for (i, part) in ty.parts.iter().enumerate() {
-        let parent = part.parent.map_or(root, |p| world[p]);
-        let mut m = parent * part.local;
-        if Some(i) == ty.pan {
-            m *= Mat4::from_rotation_z(pan.to_radians());
-        }
-        if Some(i) == ty.tilt {
-            m *= Mat4::from_rotation_x(tilt.to_radians());
-        }
-        world[i] = m;
-    }
+    let world = part_worlds(ty, mvr_transform, pan, tilt);
     let rot = |m: Mat4| {
         let m = Mat3::from_mat4(m);
         Mat3::from_cols(m.x_axis.normalize(), m.y_axis.normalize(), m.z_axis.normalize())
@@ -216,6 +261,24 @@ pub fn pose(ty: &FixtureType, mvr_transform: Mat4, pan: f32, tilt: f32) -> (Pose
         lens: world[beam_part].w_axis.truncate(),
     };
     (pose, world[pivot_part].w_axis.truncate())
+}
+
+/// World transform of every part (GDTF part frame → world) at the given pan and tilt.
+pub fn part_worlds(ty: &FixtureType, mvr_transform: Mat4, pan: f32, tilt: f32) -> Vec<Mat4> {
+    let root = mvr_transform * gdtf_to_local();
+    let mut world = vec![Mat4::IDENTITY; ty.parts.len()];
+    for (i, part) in ty.parts.iter().enumerate() {
+        let parent = part.parent.map_or(root, |p| world[p]);
+        let mut m = parent * part.local;
+        if Some(i) == ty.pan {
+            m *= Mat4::from_rotation_z(pan.to_radians());
+        }
+        if Some(i) == ty.tilt {
+            m *= Mat4::from_rotation_x(tilt.to_radians());
+        }
+        world[i] = m;
+    }
+    world
 }
 
 const SCENE_ALBEDO: f32 = 0.35;
@@ -250,42 +313,13 @@ pub fn scene_vertices(scene: &Scene) -> (Vec<f32>, Vec<String>) {
 /// Triangle list in MVR file units (Z-up, millimetres).
 fn load_mesh(scene: &Scene, m: &MeshInstance) -> Result<Vec<Vec3>> {
     let data = scene.files.get(&m.file_name).ok_or_else(|| anyhow!("missing in MVR"))?;
+    let mut tris = meshes::file_triangles(&m.file_name, data)?;
     let lower = m.file_name.to_lowercase();
-    if lower.ends_with(".3ds") {
-        let parsed = ds3::parse(data).map_err(|e| anyhow!("{e}"))?;
-        let mut tris = Vec::new();
-        for mesh in &parsed.meshes {
-            for f in &mesh.faces {
-                tris.extend(f.iter().map(|&i| Vec3::from(mesh.vertices[i as usize])));
-            }
-        }
-        Ok(tris)
-    } else if lower.ends_with(".glb") || lower.ends_with(".gltf") {
-        let (doc, buffers, _) = gltf::import_slice(data).context("glTF")?;
-        let mut tris = Vec::new();
-        // glTF is Y-up in metres
-        let to_mvr = Mat4::from_scale(Vec3::splat(1000.0)) * Mat4::from_rotation_x(PI / 2.0);
-        let scene_root = doc.default_scene().or_else(|| doc.scenes().next()).ok_or_else(|| anyhow!("no scene"))?;
-        let mut stack: Vec<(gltf::Node, Mat4)> = scene_root.nodes().map(|n| (n, to_mvr)).collect();
-        while let Some((node, parent)) = stack.pop() {
-            let m = parent * Mat4::from_cols_array_2d(&node.transform().matrix());
-            if let Some(mesh) = node.mesh() {
-                for prim in mesh.primitives() {
-                    let reader = prim.reader(|b| buffers.get(b.index()).map(|d| &d.0[..]));
-                    let Some(positions) = reader.read_positions() else { continue };
-                    let pos: Vec<Vec3> = positions.map(|p| m.transform_point3(Vec3::from(p))).collect();
-                    match reader.read_indices() {
-                        Some(idx) => tris.extend(idx.into_u32().map(|i| pos[i as usize])),
-                        None => tris.extend(pos),
-                    }
-                }
-            }
-            stack.extend(node.children().map(|c| (c, m)));
-        }
-        Ok(tris)
-    } else {
-        Err(anyhow!("unsupported mesh format"))
+    if lower.ends_with(".glb") || lower.ends_with(".gltf") {
+        // glTF is in metres
+        tris.iter_mut().for_each(|p| *p *= 1000.0);
     }
+    Ok(tris)
 }
 
 /// Axis-aligned bounds of the fixtures' pivots, for framing the camera.
@@ -324,6 +358,7 @@ mod tests {
             wheels: Vec::new(),
             models: Vec::new(),
             missing_media: 0,
+            missing_models: 0,
         }
     }
 

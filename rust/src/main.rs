@@ -186,7 +186,8 @@ impl App {
         let mut camera = OrbitCamera::look_at(EYE, TARGET, FOV);
         let (mut fixtures, mut renderer, rig, universes) = if let Some(path) = &self.args.mvr {
             let (rig, stage) = load_mvr(path)?;
-            let renderer = Renderer::new(gl.clone(), size, quality, &rig.gobos.layers, &stage)?;
+            let mut renderer = Renderer::new(gl.clone(), size, quality, &rig.gobos.layers, &stage)?;
+            renderer.set_models(&rig.meshes);
             let fixtures = rig.render_fixtures();
             fit_camera(&mut camera, &fixtures);
             let ports = patch_ports(&rig, map);
@@ -293,6 +294,7 @@ impl App {
             let receiver = if artnet_missing { Some(self.start_artnet(patch_ports(&rig, map))?) } else { None };
             let Some(r) = self.running.as_mut() else { return Ok(()) };
             r.renderer.set_scene(&rig.gobos.layers, &stage)?;
+            r.renderer.set_models(&rig.meshes);
             if let Some(receiver) = receiver {
                 r.artnet = Some(receiver);
             }
@@ -359,6 +361,7 @@ impl App {
                 None => rig.update(|_| None, dt),
             }
             r.fixtures = rig.render_fixtures();
+            r.renderer.set_model_instances(&rig.model_instances());
         } else {
             let held = |k| r.keys.contains(&k) as i32 as f32;
             let (pan_axis, tilt_axis) = (

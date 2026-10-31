@@ -15,6 +15,7 @@ use gdtf::wheel::WheelSlotOptic;
 use gdtf::GdtfFile;
 use glam::{Mat3, Mat4, Vec3};
 
+use crate::meshes::{cuboid, file_triangles};
 use crate::resources::{gobo_transmission, GOBO_SIZE};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,6 +94,9 @@ pub struct Model {
     pub file: Option<String>,
     /// Length (x), width (y), height (z) in metres; the mesh is scaled to this box.
     pub size: Vec3,
+    /// Triangles in the part's frame (metres, GDTF axes), scaled to `size`. A box of `size` for
+    /// primitives and for files that are missing or unreadable; `None` for an empty size.
+    pub mesh: Option<Vec<Vec3>>,
 }
 
 #[derive(Clone, Debug)]
@@ -109,6 +113,8 @@ pub struct FixtureType {
     pub models: Vec<Model>,
     /// Wheel slots whose image is referenced but missing from the archive.
     pub missing_media: usize,
+    /// Models whose mesh file is missing or unreadable (drawn as their box).
+    pub missing_models: usize,
 }
 
 /// Wheel images of all fixture types as GOBO_SIZE² R8 layers. Each wheel with images occupies
@@ -226,13 +232,14 @@ impl FixtureType {
             let modes: Vec<String> = ft.dmx_modes.iter().map(|m| name_of(m.name.as_ref())).collect();
             anyhow!("{} {} has no mode \"{mode}\" (modes: {modes:?})", ft.manufacturer, ft.long_name)
         })?;
-        let models: Vec<Model> = ft
+        let mut models: Vec<Model> = ft
             .models
             .iter()
             .map(|m| Model {
                 name: name_of(m.name.as_ref()),
                 file: m.file.clone().filter(|f| !f.is_empty()),
                 size: Vec3::new(m.length as f32, m.width as f32, m.height as f32),
+                mesh: None,
             })
             .collect();
         let root_name = name_of(dmx_mode.geometry.as_ref());
@@ -288,6 +295,31 @@ impl FixtureType {
             wheels.push(Wheel { name: name_of(wheel.name.as_ref()), layers, slots });
         }
 
+        let mut missing_models = 0;
+        for m in &mut models {
+            if m.size.max_element() <= 0.0 {
+                continue;
+            }
+            let loaded = m.file.as_ref().and_then(|f| {
+                ["models/3ds/{}.3ds", "models/gltf/{}.glb", "models/gltf/{}.gltf"].iter().find_map(|pattern| {
+                    let path = pattern.replace("{}", f);
+                    let mut data = Vec::new();
+                    file.resources.read_resource(&path).ok()?.read_to_end(&mut data).ok()?;
+                    file_triangles(&path, &data).ok().filter(|t| !t.is_empty())
+                })
+            });
+            if m.file.is_some() && loaded.is_none() {
+                missing_models += 1;
+            }
+            m.mesh = Some(match loaded {
+                Some(tris) => fit_to_size(tris, m.size),
+                None => {
+                    let half = m.size * 0.5;
+                    cuboid(-half, half).pos
+                }
+            });
+        }
+
         Ok(Self {
             manufacturer: ft.manufacturer.clone(),
             name: ft.long_name.clone(),
@@ -299,6 +331,7 @@ impl FixtureType {
             wheels,
             models,
             missing_media,
+            missing_models,
         })
     }
 
@@ -316,6 +349,15 @@ impl FixtureType {
         }
         m
     }
+}
+
+/// Scales a mesh about its origin so its bounding box has the model's size (axes with no extent stay).
+fn fit_to_size(mut tris: Vec<Vec3>, size: Vec3) -> Vec<Vec3> {
+    let (lo, hi) = tris.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
+    let extent = hi - lo;
+    let scale = Vec3::select(extent.cmpgt(Vec3::splat(1e-9)) & size.cmpgt(Vec3::ZERO), size / extent, Vec3::ONE);
+    tris.iter_mut().for_each(|p| *p *= scale);
+    tris
 }
 
 fn flatten(g: &Geometry, parent: Option<usize>, models: &[Model], parts: &mut Vec<Part>, beam: &mut Option<Beam>) -> Result<()> {
@@ -360,6 +402,18 @@ fn flatten(g: &Geometry, parent: Option<usize>, models: &[Model], parts: &mut Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_mesh_scaled_to_size_about_origin() {
+        // unit cube from (0,0,-1) to (1,2,0), model box 0.5 × 0.5 × 0.25
+        let tris = vec![Vec3::new(0.0, 0.0, -1.0), Vec3::new(1.0, 2.0, 0.0), Vec3::new(1.0, 0.0, 0.0)];
+        let out = fit_to_size(tris, Vec3::new(0.5, 0.5, 0.25));
+        assert!(out[0].abs_diff_eq(Vec3::new(0.0, 0.0, -0.25), 1e-6));
+        assert!(out[1].abs_diff_eq(Vec3::new(0.5, 0.5, 0.0), 1e-6));
+        // a flat mesh keeps its zero extent
+        let flat = fit_to_size(vec![Vec3::ZERO, Vec3::X, Vec3::Y], Vec3::new(2.0, 2.0, 1.0));
+        assert!(flat.iter().all(|p| p.z == 0.0) && flat[1].x == 2.0);
+    }
 
     fn cie(x: f64, y: f64, big_y: f64) -> ColorCie {
         ColorCie { x, y, z: big_y }
